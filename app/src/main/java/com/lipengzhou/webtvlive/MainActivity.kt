@@ -249,24 +249,45 @@ class MainActivity : AppCompatActivity() {
     // endregion
 
     // region 遥控器按键：上/下换台，返回键两次退出
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        when (keyCode) {
-            KeyEvent.KEYCODE_BACK -> {
-                handleBack()
-                return true
+    //
+    // 关键：必须在 dispatchKeyEvent 里拦截，而不是 onKeyDown。
+    // onKeyDown 只是「焦点 View（WebView）没消费按键时」才回调的兜底；方向键会先进 WebView：
+    //  - 左/右 让 WebView 滚动页面 / 把焦点移进网页 —— 表现为「视频画面移动」；
+    //  - 焦点一旦进了网页，后续上/下也被 WebView 吃掉，传不到这里 —— 表现为「换台失灵」。
+    // 在 dispatchKeyEvent 提前吞掉这些键，WebView 永远拿不到，两个问题一并解决。
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val keyCode = event.keyCode
+        if (isRemoteControlKey(keyCode)) {
+            // 只在按下时执行动作；抬起事件也一并吞掉，避免只截按下、抬起漏给 WebView
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                handleRemoteKeyDown(keyCode)
             }
-            // 上：下一个频道（cctv1 -> cctv2 …，到末尾循环回第一个）
-            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> {
-                switchChannel(+1)
-                return true
-            }
-            // 下：上一个频道（cctv2 -> cctv1 …，到开头循环回最后一个）
-            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> {
-                switchChannel(-1)
-                return true
-            }
+            return true
         }
-        return super.onKeyDown(keyCode, event)
+        return super.dispatchKeyEvent(event)
+    }
+
+    /** 本 App 需要独占的遥控器键（其余如音量键放行给系统）。 */
+    private fun isRemoteControlKey(keyCode: Int): Boolean = when (keyCode) {
+        KeyEvent.KEYCODE_BACK,
+        KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP,
+        KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN,
+        KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> true
+        else -> false
+    }
+
+    private fun handleRemoteKeyDown(keyCode: Int) {
+        when (keyCode) {
+            KeyEvent.KEYCODE_BACK -> handleBack()
+            // 上：下一个频道（cctv1 -> cctv2 …，到末尾循环回第一个）
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> switchChannel(+1)
+            // 下：上一个频道（cctv2 -> cctv1 …，到开头循环回最后一个）
+            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> switchChannel(-1)
+            // 左/右、OK/中央键：本 App 不做网页内导航，吞掉即可，防止 WebView 滚动页面 / 移动焦点
+            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { /* no-op：故意屏蔽 */ }
+        }
     }
 
     /** 按 delta（+1/-1）循环切换频道。只更新下标 + 浮层反馈，真正加载走防抖，避免狂按时逐台请求被限流。 */
