@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">WebTvLive</string>
+    <string name="loading">正在加载直播…</string>
+    <string name="exit_hint">再按一次返回键退出</string>
+</resources>
