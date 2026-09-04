@@ -45,7 +45,10 @@ class MainActivity : AppCompatActivity() {
     // 返回键两次退出
     private var lastBackPressedTime = 0L
 
-    // 当前频道下标（遥控器上/下切换）；默认 CCTV-13 新闻，保持与旧版一致
+    // 记住「上次播放的频道」：应用退出后重开继续播放该台
+    private val prefs by lazy { getSharedPreferences(PREFS_NAME, MODE_PRIVATE) }
+
+    // 当前频道下标（遥控器上/下切换）；无记录时默认 CCTV-13 新闻，保持与旧版一致
     private var currentChannelIndex = 13
 
     // 主线程 Handler：控制频道名浮层自动隐藏
@@ -60,6 +63,9 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val BACK_EXIT_INTERVAL = 2000L
         private const val CHANNEL_NAME_SHOW_MS = 3000L
+        // 记住上次频道用的 SharedPreferences
+        private const val PREFS_NAME = "webtvlive_prefs"
+        private const val KEY_LAST_CHANNEL = "last_channel_index"
         // 桌面 UA：与用 chrome-devtools 实测一致的页面结构（拿到标准 H5 <video> 播放器）
         private const val DESKTOP_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
@@ -104,6 +110,7 @@ class MainActivity : AppCompatActivity() {
             ViewGroup.LayoutParams.MATCH_PARENT
         )
 
+        currentChannelIndex = restoreLastChannelIndex()
         loadCurrentChannel()
     }
 
@@ -265,10 +272,22 @@ class MainActivity : AppCompatActivity() {
     /** 加载当前下标对应的频道，先重置 WebView 再载入，避免上一路视频残留。 */
     private fun loadCurrentChannel() {
         val channel = CHANNELS[currentChannelIndex]
+        saveLastChannelIndex(currentChannelIndex)
         binding.loadingText.visibility = View.VISIBLE
         showChannelName(channel.name)
         webView.stopLoading()
         webView.loadUrl(channel.url)
+    }
+
+    /** 读取上次播放的频道下标；无记录或越界时回退到默认台。 */
+    private fun restoreLastChannelIndex(): Int {
+        val saved = prefs.getInt(KEY_LAST_CHANNEL, currentChannelIndex)
+        return if (saved in CHANNELS.indices) saved else currentChannelIndex
+    }
+
+    /** 持久化当前频道下标，供下次启动恢复。 */
+    private fun saveLastChannelIndex(index: Int) {
+        prefs.edit().putInt(KEY_LAST_CHANNEL, index).apply()
     }
 
     /** 在屏幕角落短暂显示频道名，便于确认当前台。 */
