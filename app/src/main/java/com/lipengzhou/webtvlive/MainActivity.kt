@@ -1,8 +1,9 @@
 package com.lipengzhou.webtvlive
 
 import android.annotation.SuppressLint
-import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
@@ -22,12 +23,12 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.lipengzhou.webtvlive.databinding.ActivityMainBinding
 
 /**
- * WebTvLive 第一版：
- *  - 启动后自动加载固定直播页 CCTV-13；
+ * WebTvLive：
+ *  - 启动后自动加载频道列表中的默认频道；
  *  - 页面加载完注入全屏脚本，把网页 <video> 铺满整个屏幕；
- *  - 遥控器/系统「返回键」按两次退出应用。
+ *  - 遥控器方向键「上/下」循环换台，返回键按两次退出应用。
  *
- * 后续（换台、频道列表、多源、遥控器完整映射）按 docs/开发计划.md 推进。
+ * 后续（频道列表、多源、遥控器完整映射）按 docs/开发计划.md 推进。
  */
 class MainActivity : AppCompatActivity() {
 
@@ -44,13 +45,47 @@ class MainActivity : AppCompatActivity() {
     // 返回键两次退出
     private var lastBackPressedTime = 0L
 
+    // 当前频道下标（遥控器上/下切换）；默认 CCTV-13 新闻，保持与旧版一致
+    private var currentChannelIndex = 13
+
+    // 主线程 Handler：控制频道名浮层自动隐藏
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private val hideChannelNameRunnable = Runnable {
+        binding.channelName.visibility = View.GONE
+    }
+
+    /** 一个 CCTV 频道：显示名 + 官网直播页 URL。 */
+    private data class Channel(val name: String, val url: String)
+
     companion object {
-        private const val HOME_URL = "https://tv.cctv.com/live/cctv13/"
         private const val BACK_EXIT_INTERVAL = 2000L
+        private const val CHANNEL_NAME_SHOW_MS = 3000L
         // 桌面 UA：与用 chrome-devtools 实测一致的页面结构（拿到标准 H5 <video> 播放器）
         private const val DESKTOP_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+        // CCTV 官网直播频道表（顺序即遥控器上/下切换顺序，循环）
+        private val CHANNELS = listOf(
+            Channel("CCTV-1 综合", "https://tv.cctv.com/live/cctv1/"),
+            Channel("CCTV-2 财经", "https://tv.cctv.com/live/cctv2/"),
+            Channel("CCTV-3 综艺", "https://tv.cctv.com/live/cctv3/"),
+            Channel("CCTV-4 中文国际", "https://tv.cctv.com/live/cctv4/"),
+            Channel("CCTV-5 体育", "https://tv.cctv.com/live/cctv5/"),
+            Channel("CCTV-5+ 体育赛事", "https://tv.cctv.com/live/cctv5plus/"),
+            Channel("CCTV-6 电影", "https://tv.cctv.com/live/cctv6/"),
+            Channel("CCTV-7 国防军事", "https://tv.cctv.com/live/cctv7/"),
+            Channel("CCTV-8 电视剧", "https://tv.cctv.com/live/cctv8/"),
+            Channel("CCTV-9 纪录", "https://tv.cctv.com/live/cctvjilu/"),
+            Channel("CCTV-10 科教", "https://tv.cctv.com/live/cctv10/"),
+            Channel("CCTV-11 戏曲", "https://tv.cctv.com/live/cctv11/"),
+            Channel("CCTV-12 社会与法", "https://tv.cctv.com/live/cctv12/"),
+            Channel("CCTV-13 新闻", "https://tv.cctv.com/live/cctv13/"),
+            Channel("CCTV-14 少儿", "https://tv.cctv.com/live/cctvchild/"),
+            Channel("CCTV-15 音乐", "https://tv.cctv.com/live/cctv15/"),
+            Channel("CCTV-16 奥林匹克", "https://tv.cctv.com/live/cctv16/"),
+            Channel("CCTV-17 农业农村", "https://tv.cctv.com/live/cctv17/"),
+        )
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -69,7 +104,7 @@ class MainActivity : AppCompatActivity() {
             ViewGroup.LayoutParams.MATCH_PARENT
         )
 
-        webView.loadUrl(HOME_URL)
+        loadCurrentChannel()
     }
 
     // region WebView 构建
@@ -199,13 +234,49 @@ class MainActivity : AppCompatActivity() {
     }
     // endregion
 
-    // region 返回键两次退出（遥控器返回键即 KEYCODE_BACK）
+    // region 遥控器按键：上/下换台，返回键两次退出
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_BACK) {
-            handleBack()
-            return true
+        when (keyCode) {
+            KeyEvent.KEYCODE_BACK -> {
+                handleBack()
+                return true
+            }
+            // 上：下一个频道（cctv1 -> cctv2 …，到末尾循环回第一个）
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> {
+                switchChannel(+1)
+                return true
+            }
+            // 下：上一个频道（cctv2 -> cctv1 …，到开头循环回最后一个）
+            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> {
+                switchChannel(-1)
+                return true
+            }
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    /** 按 delta（+1/-1）循环切换频道并加载。 */
+    private fun switchChannel(delta: Int) {
+        val size = CHANNELS.size
+        currentChannelIndex = ((currentChannelIndex + delta) % size + size) % size
+        loadCurrentChannel()
+    }
+
+    /** 加载当前下标对应的频道，先重置 WebView 再载入，避免上一路视频残留。 */
+    private fun loadCurrentChannel() {
+        val channel = CHANNELS[currentChannelIndex]
+        binding.loadingText.visibility = View.VISIBLE
+        showChannelName(channel.name)
+        webView.stopLoading()
+        webView.loadUrl(channel.url)
+    }
+
+    /** 在屏幕角落短暂显示频道名，便于确认当前台。 */
+    private fun showChannelName(name: String) {
+        binding.channelName.text = name
+        binding.channelName.visibility = View.VISIBLE
+        uiHandler.removeCallbacks(hideChannelNameRunnable)
+        uiHandler.postDelayed(hideChannelNameRunnable, CHANNEL_NAME_SHOW_MS)
     }
 
     private fun handleBack() {
@@ -232,6 +303,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        uiHandler.removeCallbacks(hideChannelNameRunnable)
         binding.webContainer.removeAllViews()
         webView.apply {
             stopLoading()

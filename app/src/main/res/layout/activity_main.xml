@@ -30,4 +30,19 @@
         android:textColor="@android:color/white"
         android:textSize="18sp" />
 
+    <!-- 换台时短暂显示的频道名浮层（默认隐藏） -->
+    <TextView
+        android:id="@+id/channelName"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_margin="24dp"
+        android:background="#99000000"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="8dp"
+        android:textColor="@android:color/white"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:visibility="gone" />
+
 </FrameLayout>
