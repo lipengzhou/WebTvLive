@@ -105,7 +105,12 @@
     if (b) { setImp(b, 'margin', '0'); setImp(b, 'padding', '0'); setImp(b, 'overflow', 'hidden'); setImp(b, 'background', '#000'); }
   }
 
-  var unmuteTries = 0;
+  // 是否「真的在播放」：非暂停、非结束、已缓冲到可连续播放的数据、有画面尺寸、且时间在走动。
+  // 只有满足这些才回传心跳，让原生撤掉加载遮罩——避免停在封面/播放按钮时就误判成已播放。
+  function isReallyPlaying(v) {
+    return !v.paused && !v.ended && v.readyState >= 3 && v.videoWidth > 0 && v.currentTime > 0;
+  }
+
   var diagOnce = false;
 
   function maintain() {
@@ -130,9 +135,14 @@
       var p = v.play();
       if (p && p.catch) p.catch(function () { v.muted = true; var p2 = v.play(); if (p2 && p2.catch) p2.catch(function () {}); });
     }
-    if (!v.paused) {
+    // 每帧都把视频本身音量拉到 100% 且取消静音（站点脚本/自动静音起播后会改回来，需持续压制）
+    try {
+      if (v.muted) v.muted = false;
+      if (v.volume !== 1) v.volume = 1;
+    } catch (e) {}
+    // 画面已就绪且已铺满，才通知原生切到视频画面
+    if (isReallyPlaying(v)) {
       notifyPlaying();
-      if (unmuteTries < 8) { try { v.muted = false; v.volume = 1; } catch (e) {} unmuteTries++; }
     }
 
     if (!diagOnce && v.videoWidth > 0) {
@@ -141,7 +151,8 @@
         var r = v.getBoundingClientRect();
         log('DIAG rect=' + Math.round(r.x) + ',' + Math.round(r.y) + ' ' + Math.round(r.width) + 'x' + Math.round(r.height) +
           ' viewport=' + window.innerWidth + 'x' + window.innerHeight +
-          ' pos=' + getComputedStyle(v).position + ' z=' + getComputedStyle(v).zIndex);
+          ' pos=' + getComputedStyle(v).position + ' z=' + getComputedStyle(v).zIndex +
+          ' volume=' + v.volume + ' muted=' + v.muted);
       }, 400);
     }
   }
@@ -151,7 +162,6 @@
     maintain();
     window.__webtvlive_timer__ = setInterval(maintain, 1000);
   } else {
-    unmuteTries = 0;
     maintain();
   }
 })();

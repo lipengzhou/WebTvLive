@@ -20,15 +20,17 @@
         android:background="@android:color/black"
         android:visibility="gone" />
 
-    <!-- 加载提示 -->
+    <!-- 加载遮罩：全屏不透明黑底，盖住网页导航与未起播的封面/播放按钮，
+         直到视频真正开播（JS 回传 notifyVideoPlaying）才切走 -->
     <TextView
         android:id="@+id/loadingText"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="center"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@android:color/black"
+        android:gravity="center"
         android:text="@string/loading"
         android:textColor="@android:color/white"
-        android:textSize="18sp" />
+        android:textSize="20sp" />
 
     <!-- 换台时短暂显示的频道名浮层（默认隐藏） -->
     <TextView

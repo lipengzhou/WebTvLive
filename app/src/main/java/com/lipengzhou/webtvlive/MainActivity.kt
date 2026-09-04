@@ -51,11 +51,13 @@ class MainActivity : AppCompatActivity() {
     // 当前频道下标（遥控器上/下切换）；无记录时默认 CCTV-13 新闻，保持与旧版一致
     private var currentChannelIndex = 13
 
-    // 主线程 Handler：控制频道名浮层自动隐藏
+    // 主线程 Handler：控制频道名浮层自动隐藏、以及换台防抖
     private val uiHandler = Handler(Looper.getMainLooper())
     private val hideChannelNameRunnable = Runnable {
         binding.channelName.visibility = View.GONE
     }
+    // 换台防抖：狂按遥控器时不每次都加载，停手后只对最终频道加载一次
+    private val loadChannelRunnable = Runnable { loadCurrentChannel() }
 
     /** 一个 CCTV 频道：显示名 + 官网直播页 URL。 */
     private data class Channel(val name: String, val url: String)
@@ -63,6 +65,8 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val BACK_EXIT_INTERVAL = 2000L
         private const val CHANNEL_NAME_SHOW_MS = 3000L
+        // 换台防抖：停止按键 600ms 后才真正加载，避免连续切台把每个中间台都请求一遍被 CCTV 限流
+        private const val CHANNEL_SWITCH_DEBOUNCE_MS = 600L
         // 记住上次频道用的 SharedPreferences
         private const val PREFS_NAME = "webtvlive_prefs"
         private const val KEY_LAST_CHANNEL = "last_channel_index"
@@ -156,8 +160,9 @@ class MainActivity : AppCompatActivity() {
         wv.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
                 super.onProgressChanged(view, newProgress)
+                // 页面加载完只补一次注入；加载遮罩不在这里隐藏——
+                // 此刻网页往往还停在封面/播放按钮，得等视频真正开播（notifyVideoPlaying）再切走。
                 if (newProgress >= 100) {
-                    binding.loadingText.visibility = View.GONE
                     inject()
                 }
             }
@@ -177,6 +182,8 @@ class MainActivity : AppCompatActivity() {
                 )
                 binding.fullscreenContainer.visibility = View.VISIBLE
                 binding.webContainer.visibility = View.GONE
+                // 走原生全屏说明视频已在播放，撤掉加载遮罩
+                binding.loadingText.visibility = View.GONE
                 enableImmersiveFullscreen()
             }
 
@@ -262,15 +269,23 @@ class MainActivity : AppCompatActivity() {
         return super.onKeyDown(keyCode, event)
     }
 
-    /** 按 delta（+1/-1）循环切换频道并加载。 */
+    /** 按 delta（+1/-1）循环切换频道。只更新下标 + 浮层反馈，真正加载走防抖，避免狂按时逐台请求被限流。 */
     private fun switchChannel(delta: Int) {
         val size = CHANNELS.size
         currentChannelIndex = ((currentChannelIndex + delta) % size + size) % size
-        loadCurrentChannel()
+        val channel = CHANNELS[currentChannelIndex]
+        // 连按浏览期间保留当前台画面、只滚动更新浮层；不马上盖遮罩/loadUrl。
+        // 遮罩留到真正加载时（loadCurrentChannel）再显示——那时旧 video 已被销毁，遮罩才盖得住。
+        showChannelName(channel.name)
+        // 防抖：停手 CHANNEL_SWITCH_DEBOUNCE_MS 后只加载最终停留的这一台
+        uiHandler.removeCallbacks(loadChannelRunnable)
+        uiHandler.postDelayed(loadChannelRunnable, CHANNEL_SWITCH_DEBOUNCE_MS)
     }
 
     /** 加载当前下标对应的频道，先重置 WebView 再载入，避免上一路视频残留。 */
     private fun loadCurrentChannel() {
+        // 首次加载可能绕过防抖直接进来，这里清一次待执行的防抖任务，避免重复加载
+        uiHandler.removeCallbacks(loadChannelRunnable)
         val channel = CHANNELS[currentChannelIndex]
         saveLastChannelIndex(currentChannelIndex)
         binding.loadingText.visibility = View.VISIBLE
@@ -323,6 +338,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         uiHandler.removeCallbacks(hideChannelNameRunnable)
+        uiHandler.removeCallbacks(loadChannelRunnable)
         binding.webContainer.removeAllViews()
         webView.apply {
             stopLoading()
