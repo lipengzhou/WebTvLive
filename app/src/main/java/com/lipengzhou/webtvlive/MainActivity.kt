@@ -36,6 +36,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private var geckoView: GeckoView? = null
     private var geckoSession: GeckoSession? = null
+    private var extensionPort: WebExtension.Port? = null
+    private var pageLoadInProgress = false
+    private var channelSwitchRequestId = 0L
+    private var waitingPlaybackRequestId: Long? = null
 
     // 返回键两次退出
     private var lastBackPressedTime = 0L
@@ -129,10 +133,12 @@ class MainActivity : AppCompatActivity() {
         }
         session.progressDelegate = object : GeckoSession.ProgressDelegate {
             override fun onPageStart(session: GeckoSession, url: String) {
+                pageLoadInProgress = true
                 Log.i(TAG, "GeckoView page start: " + url)
             }
 
             override fun onPageStop(session: GeckoSession, success: Boolean) {
+                pageLoadInProgress = false
                 Log.i(TAG, "GeckoView page stop: success=" + success)
             }
         }
@@ -194,18 +200,35 @@ class MainActivity : AppCompatActivity() {
                     session.webExtensionController.setMessageDelegate(
                         extension,
                         object : WebExtension.MessageDelegate {
+                            override fun onConnect(port: WebExtension.Port) {
+                                port.setDelegate(
+                                    object : WebExtension.PortDelegate {
+                                        override fun onPortMessage(
+                                            message: Any,
+                                            port: WebExtension.Port,
+                                        ) {
+                                            handleExtensionMessage(message, port)
+                                        }
+
+                                        override fun onDisconnect(port: WebExtension.Port) {
+                                            runOnUiThread {
+                                                if (extensionPort === port) extensionPort = null
+                                            }
+                                        }
+                                    },
+                                )
+                                runOnUiThread {
+                                    extensionPort = port
+                                    Log.i(TAG, "WebExtension native port connected")
+                                }
+                            }
+
                             override fun onMessage(
                                 nativeApp: String,
                                 message: Any,
                                 sender: WebExtension.MessageSender,
                             ): GeckoResult<Any>? {
-                                val payload = message as? JSONObject
-                                when (payload?.optString("type")) {
-                                    "playing" -> runOnUiThread {
-                                        binding.loadingText.visibility = View.GONE
-                                    }
-                                    "diagnostic" -> Log.i(TAG, payload.optString("message"))
-                                }
+                                handleExtensionMessage(message)
                                 return null
                             }
                         },
@@ -220,6 +243,41 @@ class MainActivity : AppCompatActivity() {
                     loadCurrentChannel()
                 },
             )
+    }
+
+    /** 统一处理一次性消息和持久 Port 消息。Port ready 后下发当前频道。 */
+    private fun handleExtensionMessage(message: Any, port: WebExtension.Port? = null) {
+        val payload = message as? JSONObject ?: return
+        when (payload.optString("type")) {
+            "ready" -> runOnUiThread {
+                val activePort = port ?: extensionPort ?: return@runOnUiThread
+                extensionPort = activePort
+                sendChannelSwitch(activePort, TvCatalog.flatChannels[currentChannelIndex])
+            }
+            "playing" -> runOnUiThread {
+                val requestId = payload.optLong("requestId", -1L)
+                if (requestId == waitingPlaybackRequestId) {
+                    waitingPlaybackRequestId = null
+                    binding.loadingText.visibility = View.GONE
+                    Log.i(TAG, "Playback ready; loading overlay hidden: request=$requestId")
+                } else {
+                    Log.i(
+                        TAG,
+                        "Ignored stale playing message: request=$requestId, " +
+                            "waiting=$waitingPlaybackRequestId",
+                    )
+                }
+            }
+            "channelSelected" -> Log.i(
+                TAG,
+                "Yangshipin channel selected: ${payload.optString("channel")}",
+            )
+            "channelNotFound" -> Log.e(
+                TAG,
+                "Yangshipin channel not found: ${payload.optString("channel")}",
+            )
+            "diagnostic" -> Log.i(TAG, payload.optString("message"))
+        }
     }
     // endregion
 
@@ -301,16 +359,57 @@ class MainActivity : AppCompatActivity() {
         uiHandler.postDelayed(loadChannelRunnable, CHANNEL_SWITCH_DEBOUNCE_MS)
     }
 
-    /** 加载当前下标对应的频道，先停止当前 GeckoSession 导航，避免上一路页面继续加载。 */
+    /**
+     * 切换当前频道。央视频首页只加载一次；WebExtension Port 可用后，后续切台仅点击站内频道项，
+     * 由央视频局部替换播放器，不再 stop/loadUri 重载整页。
+     */
     private fun loadCurrentChannel() {
         // 首次加载可能绕过防抖直接进来，这里清一次待执行的防抖任务，避免重复加载
         uiHandler.removeCallbacks(loadChannelRunnable)
         val channel = TvCatalog.flatChannels[currentChannelIndex]
         saveLastChannelIndex(currentChannelIndex)
-        binding.loadingText.visibility = View.VISIBLE
         showChannelName(channel.name)
-        geckoSession?.stop()
-        geckoSession?.loadUri(channel.url)
+
+        val port = extensionPort
+        if (port != null) {
+            sendChannelSwitch(port, channel)
+            return
+        }
+
+        // 首次启动或 Port 意外断开时才重新加载首页。正常换台不会走到这里。
+        binding.loadingText.visibility = View.VISIBLE
+        if (!pageLoadInProgress) {
+            geckoSession?.stop()
+            geckoSession?.loadUri(TvCatalog.YANGSHIPIN_HOME_URL)
+        }
+    }
+
+    private fun sendChannelSwitch(port: WebExtension.Port, channel: Channel) {
+        try {
+            // 央视频页内换台时旧 video 会继续播放一小段时间。先盖住旧画面，直到扩展确认
+            // 网站已换成新的 video 节点且新频道真正开始播放，再由 playing 消息移除遮罩。
+            val requestId = ++channelSwitchRequestId
+            waitingPlaybackRequestId = requestId
+            binding.loadingText.visibility = View.VISIBLE
+            port.postMessage(
+                JSONObject()
+                    .put("type", "switchChannel")
+                    .put("channel", channel.siteName)
+                    .put("requestId", requestId),
+            )
+            Log.i(
+                TAG,
+                "Requested in-page channel switch: ${channel.siteName}, request=$requestId",
+            )
+        } catch (error: Exception) {
+            Log.e(TAG, "Unable to send channel switch through WebExtension port", error)
+            if (extensionPort === port) extensionPort = null
+            binding.loadingText.visibility = View.VISIBLE
+            if (!pageLoadInProgress) {
+                geckoSession?.stop()
+                geckoSession?.loadUri(TvCatalog.YANGSHIPIN_HOME_URL)
+            }
+        }
     }
 
     /** 读取上次播放的频道下标；无记录或越界时回退到默认台。 */
@@ -488,6 +587,8 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         uiHandler.removeCallbacks(hideChannelNameRunnable)
         uiHandler.removeCallbacks(loadChannelRunnable)
+        extensionPort?.disconnect()
+        extensionPort = null
         geckoView?.releaseSession()
         geckoSession?.close()
         binding.webContainer.removeAllViews()

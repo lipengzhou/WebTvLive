@@ -7,8 +7,8 @@
 - 一款「基于 GeckoView 的安卓直播电视 App」：内置 Firefox 内核打开各电视台**官方直播网页**，通过内置 WebExtension 把网页 `<video>` 铺满全屏，做成「像传统电视一样换台」的体验。
 - 语言 Kotlin，构建 Kotlin DSL + Version Catalog（`gradle/libs.versions.toml`），原生 XML View（不用 Compose）。
 - 核心文件：
-  - `app/src/main/java/com/lipengzhou/webtvlive/MainActivity.kt`：GeckoRuntime/GeckoSession 封装、频道加载、遥控器按键、全屏/常亮。
-  - `app/src/main/assets/webextension/`：内置 WebExtension；每秒幂等维护全屏样式，并通过 native messaging 回传播放状态。
+  - `app/src/main/java/com/lipengzhou/webtvlive/MainActivity.kt`：GeckoRuntime/GeckoSession 封装、央视频页内换台、遥控器按键、全屏/常亮。
+  - `app/src/main/assets/webextension/`：内置 WebExtension；幂等维护全屏样式、蓝光 1080P 与 100% 音量，并通过持久 native messaging Port 接收页内换台指令。
   - `app/src/main/res/layout/activity_main.xml`：黑底 FrameLayout + GeckoView 容器 + 频道名浮层。
 
 ## 构建（命令行）
@@ -75,13 +75,15 @@ adb -s 127.0.0.1:5555 logcat -d | grep -i "WebTvLive\|cctv\|Gecko\|MediaCodec"
 - **确定**（`DPAD_CENTER` / `ENTER`）：标准态=呼出左侧频道菜单；菜单态在分类列=跳到频道列，在频道列=选中并换台。
 - **左/右**（`DPAD_LEFT` / `DPAD_RIGHT`）：标准态屏蔽（防止 WebView 滚动页面/移焦点）；菜单态在「分类列 ↔ 频道列」间切换焦点。
 - **返回键**：菜单态=关闭菜单；标准态=2 秒内按两次退出。
-- 换台时先 `GeckoSession.stop()` 重置再 `loadUri`，并在左上角短暂显示频道名。
+- 首次只加载 `https://www.yangshipin.cn/tv/home`；后续换台由 WebExtension 按频道名点击央视频页面中的频道项，局部重建播放器，不再 `stop()` / `loadUri()` 整页重载。
+- 发出页内换台指令时立即显示全屏加载遮罩；WebExtension 必须确认央视频已替换旧 `<video>`，或复用的 `<video>` 触发了新一轮 `playing`，才发送带本次请求 ID 的 `playing` 隐藏遮罩，不能让旧频道或过期请求提前解除遮罩。
+- 每次播放器节点创建或换台重建后，WebExtension 会选择「蓝光 1080P」、解除静音并持续把 `<video>.volume` 设为 `1`。
 
 ### 侧边频道菜单（M1 首版）
 
 - 确定键呼出，贴屏幕左侧显示，**不遮住右侧视频、视频继续播放**（菜单只是浮层，不碰 GeckoView）。
-- 左区=分类列表（当前仅 `CCTV`，后续加省份卫视等），右区=该分类下频道列表，均垂直滚动。
-- 数据源在 `TvCatalog.kt`：`Category(name, channels)` 列表 + 拉平的 `flatChannels`（供上/下换台与「上次频道下标」历史兼容）。新增分类只改这里，UI 不动。
+- 左区=分类列表（当前为 `CCTV`、`卫视`），右区=该分类下频道列表，均垂直滚动。
+- 数据源在 `TvCatalog.kt`：`Category(name, channels)` 列表 + 拉平的 `flatChannels`（供上/下换台与「上次频道下标」历史兼容）。`Channel.siteName` 必须与央视频页面频道名完全一致。
 - 菜单导航**不走系统焦点**（方向键被 `dispatchKeyEvent` 提前吞掉，进不了 RecyclerView）：`MenuAdapter` 按外部下标渲染高亮——活动列选中行=高亮蓝（`activated`），非活动列选中行=暗选中态（`selected`）。
 - 打开菜单会把左右两列定位到「当前正在播放的频道」；左列上下移动即实时预览右列频道（不加载、不切台），在频道列按确定才真正 `loadCurrentChannel`。
 - 调试按键：`adb ... input keyevent 23`=确定（开菜单/选中），`21`/`22`=左/右切列，`19`/`20`=上/下移动，`4`=返回（关菜单）。

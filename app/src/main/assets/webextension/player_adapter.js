@@ -3,6 +3,13 @@
   var KEEP = 'data-webtvlive-keep';
   var CLEARED = 'data-webtvlive-cleared';
   var playingNotified = false;
+  var configuredVideo = null;
+  var pendingChannel = '';
+  var nativePort = null;
+  var videoBeforeChannelSwitch = null;
+  var waitingForReplacementVideo = false;
+  var pendingRequestId = 0;
+  var activePlaybackRequestId = 0;
 
   function send(type, message) {
     try {
@@ -10,11 +17,116 @@
     } catch (e) {}
   }
 
+  function sendPort(type, extra) {
+    if (!nativePort) return;
+    try {
+      var payload = { type: type };
+      if (extra) {
+        for (var key in extra) payload[key] = extra[key];
+      }
+      nativePort.postMessage(payload);
+    } catch (e) {}
+  }
+
+  /**
+   * 建立 App <-> 页面持久连接。Android 端通过此 Port 下发频道名，页面直接点击央视频
+   * 已渲染的频道项，让网站自己的 Vue 逻辑局部重建播放器，避免整页 loadUri。
+   */
+  function connectNativePort() {
+    try {
+      nativePort = browser.runtime.connectNative('webtvlive');
+      nativePort.onMessage.addListener(function (message) {
+        if (message && message.type === 'switchChannel' && message.channel) {
+          pendingChannel = String(message.channel);
+          pendingRequestId = Number(message.requestId) || 0;
+          selectYangshipinChannel();
+        }
+      });
+      nativePort.onDisconnect.addListener(function () {
+        nativePort = null;
+      });
+      sendPort('ready');
+    } catch (e) {
+      send('diagnostic', 'Unable to connect native port: ' + e);
+    }
+  }
+
   function setImp(el, key, value) {
     try { el.style.setProperty(key, value, 'important'); } catch (e) {}
   }
 
   send('diagnostic', 'Gecko adapter injected: ' + location.href);
+  connectNativePort();
+
+  function getYangshipinChannelName(element) {
+    var source = element.querySelector('span') || element;
+    var clone = source.cloneNode(true);
+    var tags = clone.querySelectorAll('.tv-main-con-r-list-left-tag');
+    for (var i = 0; i < tags.length; i++) tags[i].remove();
+    return (clone.textContent || '').trim();
+  }
+
+  function selectYangshipinChannel() {
+    if (!pendingChannel || location.hostname.indexOf('yangshipin.cn') < 0) return false;
+
+    var items = document.querySelectorAll(
+      '.tv-main-con-r-list-left-imga, .tv-main-con-r-list-left-imgb'
+    );
+    for (var i = 0; i < items.length; i++) {
+      if (getYangshipinChannelName(items[i]) !== pendingChannel) continue;
+
+      var selectedChannel = pendingChannel;
+      pendingChannel = '';
+      activePlaybackRequestId = pendingRequestId;
+      pendingRequestId = 0;
+      playingNotified = false;
+      configuredVideo = null;
+
+      // 如果本来就是目标频道，不需要重建播放器；否则记住旧 video。央视频点击频道后会
+      // 局部替换 video 节点，在新节点出现前绝不能用仍在播放的旧节点回报 playing。
+      if (items[i].classList.contains('tvSelect')) {
+        videoBeforeChannelSwitch = null;
+        waitingForReplacementVideo = false;
+      } else {
+        videoBeforeChannelSwitch = pickVideo();
+        waitingForReplacementVideo = videoBeforeChannelSwitch !== null;
+        if (videoBeforeChannelSwitch) {
+          // 央视频有两种实现：有时替换整个 video 节点，有时复用同一节点重新装载媒体。
+          // 对复用节点的情况，下一次 playing 事件就是新频道真正有画面的可靠信号。
+          var observedVideo = videoBeforeChannelSwitch;
+          var observedRequestId = activePlaybackRequestId;
+          observedVideo.addEventListener('playing', function () {
+            if (
+              waitingForReplacementVideo &&
+              activePlaybackRequestId === observedRequestId &&
+              pickVideo() === observedVideo
+            ) {
+              waitingForReplacementVideo = false;
+              videoBeforeChannelSwitch = null;
+              send('diagnostic', 'Yangshipin reused video started playing');
+            }
+          }, { once: true });
+        }
+        items[i].click();
+      }
+      sendPort('channelSelected', { channel: selectedChannel });
+      send('diagnostic', 'Yangshipin in-page switch: ' + selectedChannel);
+      return true;
+    }
+
+    // 首页内容异步渲染；保留 pendingChannel，由 maintain() 继续重试。
+    return false;
+  }
+
+  function selectBlueLightQuality() {
+    var items = document.querySelectorAll('.bei-list .item');
+    for (var i = 0; i < items.length; i++) {
+      if ((items[i].textContent || '').trim() !== '蓝光 1080P') continue;
+      if (!items[i].classList.contains('active')) items[i].click();
+      return true;
+    }
+    return false;
+  }
 
   function pickVideo() {
     var videos = document.querySelectorAll('video');
@@ -110,9 +222,17 @@
   }
 
   function maintain() {
+    selectYangshipinChannel();
+
     var video = pickVideo();
     var target = video || pickPlayerFrame();
     if (!target) return;
+
+    if (waitingForReplacementVideo && video && video !== videoBeforeChannelSwitch) {
+      waitingForReplacementVideo = false;
+      videoBeforeChannelSwitch = null;
+      send('diagnostic', 'Yangshipin replacement video detected');
+    }
 
     setImp(document.documentElement, 'overflow', 'hidden');
     setImp(document.documentElement, 'background', '#000');
@@ -127,6 +247,17 @@
     if (!video) return;
     setImp(video, 'object-fit', 'contain');
 
+    if (configuredVideo !== video) {
+      configuredVideo = video;
+      playingNotified = false;
+      if (selectBlueLightQuality()) {
+        send('diagnostic', 'Yangshipin quality selected: 蓝光 1080P');
+      }
+    } else {
+      // 画质控件可能晚于 video 节点出现；未选中时重复检查是幂等的。
+      selectBlueLightQuality();
+    }
+
     video.autoplay = true;
     video.setAttribute('playsinline', '');
     if (video.paused) {
@@ -138,15 +269,16 @@
       video.volume = 1;
     } catch (e) {}
 
-    if (!playingNotified && !video.paused && !video.ended && video.readyState >= 3 && video.videoWidth > 0 && video.currentTime > 0) {
+    if (!waitingForReplacementVideo && !playingNotified && !video.paused && !video.ended && video.readyState >= 3 && video.videoWidth > 0 && video.currentTime > 0) {
       playingNotified = true;
-      send('playing');
+      sendPort('playing', { requestId: activePlaybackRequestId });
       var rect = video.getBoundingClientRect();
-      send('diagnostic', 'Gecko video playing: ' + video.videoWidth + 'x' + video.videoHeight + ', rect=' + Math.round(rect.width) + 'x' + Math.round(rect.height) + ', viewport=' + window.innerWidth + 'x' + window.innerHeight + ', url=' + location.href);
+      var activeQuality = document.querySelector('.bei-list .item.active');
+      send('diagnostic', 'Gecko video playing: ' + video.videoWidth + 'x' + video.videoHeight + ', rect=' + Math.round(rect.width) + 'x' + Math.round(rect.height) + ', viewport=' + window.innerWidth + 'x' + window.innerHeight + ', volume=' + Math.round(video.volume * 100) + '%, muted=' + video.muted + ', quality=' + (activeQuality ? activeQuality.textContent.trim() : 'unknown') + ', url=' + location.href);
     }
     video.setAttribute(MARK, '1');
   }
 
   maintain();
-  setInterval(maintain, 1000);
+  setInterval(maintain, 500);
 })();
