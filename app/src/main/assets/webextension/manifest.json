@@ -1,0 +1,29 @@
+{
+  "manifest_version": 2,
+  "name": "WebTvLive Player Adapter",
+  "version": "1.5",
+  "description": "Adapts official live pages for fullscreen TV playback.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "webtvlive@lipengzhou.com"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://tv.cctv.com/*",
+        "https://*.cctv.com/*",
+        "https://*.cntv.cn/*",
+        "https://*.yangshipin.cn/*"
+      ],
+      "js": ["player_adapter.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "permissions": [
+    "nativeMessaging",
+    "nativeMessagingFromContent",
+    "geckoViewAddons"
+  ]
+}

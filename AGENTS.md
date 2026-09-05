@@ -4,12 +4,12 @@
 
 ## 项目速览
 
-- 一款「基于 WebView 的安卓直播电视 App」：内置浏览器打开各电视台**官方直播网页**，注入 JS 把网页 `<video>` 铺满全屏，做成「像传统电视一样换台」的体验。
+- 一款「基于 GeckoView 的安卓直播电视 App」：内置 Firefox 内核打开各电视台**官方直播网页**，通过内置 WebExtension 把网页 `<video>` 铺满全屏，做成「像传统电视一样换台」的体验。
 - 语言 Kotlin，构建 Kotlin DSL + Version Catalog（`gradle/libs.versions.toml`），原生 XML View（不用 Compose）。
 - 核心文件：
-  - `app/src/main/java/com/lipengzhou/webtvlive/MainActivity.kt`：WebView 封装、频道表 `CHANNELS`、遥控器按键、全屏/常亮。
-  - `app/src/main/assets/default_js_template.js`：每秒幂等维护的全屏注入脚本（自愈，压过站点内联样式）。
-  - `app/src/main/res/layout/activity_main.xml`：黑底 FrameLayout + WebView 容器 + 原生全屏兜底容器 + 频道名浮层。
+  - `app/src/main/java/com/lipengzhou/webtvlive/MainActivity.kt`：GeckoRuntime/GeckoSession 封装、频道加载、遥控器按键、全屏/常亮。
+  - `app/src/main/assets/webextension/`：内置 WebExtension；每秒幂等维护全屏样式，并通过 native messaging 回传播放状态。
+  - `app/src/main/res/layout/activity_main.xml`：黑底 FrameLayout + GeckoView 容器 + 频道名浮层。
 
 ## 构建（命令行）
 
@@ -21,9 +21,10 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 # 只编译 Kotlin（快速验证语法/编译）
 ./gradlew :app:compileDebugKotlin -q
 
-# 打 debug APK
+# 打 debug APK（按 ABI 分包）
 ./gradlew :app:assembleDebug -q
-# 产物：app/build/outputs/apk/debug/app-debug.apk
+# 电视：app/build/outputs/apk/debug/app-armeabi-v7a-debug.apk
+# ARM64 模拟器：app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
 ```
 
 ## 在模拟器/真机上调试（无遥控器时的等效操作）
@@ -37,7 +38,7 @@ adb -s 127.0.0.1:5555 shell getprop ro.product.manufacturer   # -> Xiaomi
 adb -s 127.0.0.1:5555 shell getprop ro.build.version.sdk       # -> 32
 
 # 1) 安装新版（覆盖安装保留数据）
-adb -s 127.0.0.1:5555 install -r app/build/outputs/apk/debug/app-debug.apk
+adb -s 127.0.0.1:5555 install -r app/build/outputs/apk/debug/app-armeabi-v7a-debug.apk
 
 # 2) 启动 app
 adb -s 127.0.0.1:5555 shell monkey -p com.lipengzhou.webtvlive -c android.intent.category.LAUNCHER 1
@@ -59,12 +60,12 @@ for i in $(seq 1 6); do adb -s 127.0.0.1:5555 shell input keyevent 19; sleep 3; 
 adb -s 127.0.0.1:5555 exec-out screencap -p > /tmp/webtv.png
 ```
 
-排查页面/播放问题时看 WebView 控制台日志：
+排查页面/播放问题时看 GeckoView 和系统媒体日志：
 
 ```bash
 adb -s 127.0.0.1:5555 logcat -c                              # 先清空
 # 触发操作后
-adb -s 127.0.0.1:5555 logcat -d | grep -i "WebTvLive\|cctv\|chromium"
+adb -s 127.0.0.1:5555 logcat -d | grep -i "WebTvLive\|cctv\|Gecko\|MediaCodec"
 ```
 
 ### 交互速查（当前实现）
@@ -74,11 +75,11 @@ adb -s 127.0.0.1:5555 logcat -d | grep -i "WebTvLive\|cctv\|chromium"
 - **确定**（`DPAD_CENTER` / `ENTER`）：标准态=呼出左侧频道菜单；菜单态在分类列=跳到频道列，在频道列=选中并换台。
 - **左/右**（`DPAD_LEFT` / `DPAD_RIGHT`）：标准态屏蔽（防止 WebView 滚动页面/移焦点）；菜单态在「分类列 ↔ 频道列」间切换焦点。
 - **返回键**：菜单态=关闭菜单；标准态=2 秒内按两次退出。
-- 换台时先 `stopLoading()` 重置再 `loadUrl`，并在左上角短暂显示频道名。
+- 换台时先 `GeckoSession.stop()` 重置再 `loadUri`，并在左上角短暂显示频道名。
 
 ### 侧边频道菜单（M1 首版）
 
-- 确定键呼出，贴屏幕左侧显示，**不遮住右侧视频、视频继续播放**（菜单只是浮层，不碰 WebView）。
+- 确定键呼出，贴屏幕左侧显示，**不遮住右侧视频、视频继续播放**（菜单只是浮层，不碰 GeckoView）。
 - 左区=分类列表（当前仅 `CCTV`，后续加省份卫视等），右区=该分类下频道列表，均垂直滚动。
 - 数据源在 `TvCatalog.kt`：`Category(name, channels)` 列表 + 拉平的 `flatChannels`（供上/下换台与「上次频道下标」历史兼容）。新增分类只改这里，UI 不动。
 - 菜单导航**不走系统焦点**（方向键被 `dispatchKeyEvent` 提前吞掉，进不了 RecyclerView）：`MenuAdapter` 按外部下标渲染高亮——活动列选中行=高亮蓝（`activated`），非活动列选中行=暗选中态（`selected`）。
@@ -89,6 +90,9 @@ adb -s 127.0.0.1:5555 logcat -d | grep -i "WebTvLive\|cctv\|chromium"
 
 - Activity 是横屏（`sensorLandscape`）。模拟器若锁竖屏会显示异常，转成横屏即可。
 - AGP 9.3.2 脚手架已内置 Kotlin 插件，**不要**再手动加 `org.jetbrains.kotlin.android`（会报 `extension 'kotlin' already registered`）。
+- GeckoView 153 使用 Java 17 API，Gradle 的 Java/Kotlin JVM target 必须保持 17。
+- 构建启用了 ABI 拆包：32 位电视安装 `app-armeabi-v7a-debug.apk`，ARM64 模拟器安装 `app-arm64-v8a-debug.apk`。
+- 腾讯 X5 在 `MiTV-MFTP0` 上初始化返回下载状态 `-124`（服务端未下发内核），会退回系统 WebView 66，因此没有作为最终方案保留。
 - 全屏方案关键结论详见 `docs/开发计划.md` 的 M0 章节（清祖先 `transform`、每秒写 `!important` 内联样式、隐藏非播放器顶层节点、不开 `useWideViewPort/loadWithOverviewMode`）。
 
 ## 合规红线

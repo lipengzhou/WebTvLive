@@ -1,20 +1,12 @@
 package com.lipengzhou.webtvlive
 
-import android.annotation.SuppressLint
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
-import android.webkit.JavascriptInterface
-import android.webkit.SslErrorHandler
-import android.webkit.WebChromeClient
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import android.webkit.WebResourceRequest
-import android.net.http.SslError
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
@@ -22,6 +14,14 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.lipengzhou.webtvlive.databinding.ActivityMainBinding
+import org.json.JSONObject
+import org.mozilla.geckoview.GeckoResult
+import org.mozilla.geckoview.GeckoRuntime
+import org.mozilla.geckoview.GeckoRuntimeSettings
+import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoSessionSettings
+import org.mozilla.geckoview.GeckoView
+import org.mozilla.geckoview.WebExtension
 
 /**
  * WebTvLive：
@@ -34,14 +34,8 @@ import com.lipengzhou.webtvlive.databinding.ActivityMainBinding
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
-    private lateinit var webView: WebView
-
-    // onShowCustomView 兜底用（部分站点走原生全屏时）
-    private var customView: View? = null
-    private var customViewCallback: WebChromeClient.CustomViewCallback? = null
-
-    // 注入脚本缓存
-    private val injectJs: String by lazy { readAssetJs() }
+    private var geckoView: GeckoView? = null
+    private var geckoSession: GeckoSession? = null
 
     // 返回键两次退出
     private var lastBackPressedTime = 0L
@@ -54,7 +48,7 @@ class MainActivity : AppCompatActivity() {
     private var currentChannelIndex = 13
 
     // region 侧边菜单状态
-    // 菜单是否展开。菜单只是盖在视频上的左侧浮层，展开期间不碰 WebView，视频照常播放。
+    // 菜单是否展开。菜单只是盖在视频上的左侧浮层，展开期间不碰 GeckoView，视频照常播放。
     private var menuVisible = false
     // 当前活动列：左=分类，右=频道。方向键上/下作用在活动列上，左/右在两列间切换。
     private var activeColumn = COLUMN_CHANNEL
@@ -84,13 +78,18 @@ class MainActivity : AppCompatActivity() {
         // 侧边菜单两列
         private const val COLUMN_CATEGORY = 0
         private const val COLUMN_CHANNEL = 1
-        // 桌面 UA：与用 chrome-devtools 实测一致的页面结构（拿到标准 H5 <video> 播放器）
+        private const val TAG = "WebTvLive"
+        private const val EXTENSION_LOCATION = "resource://android/assets/webextension/"
+        private const val EXTENSION_ID = "webtvlive@lipengzhou.com"
+        private const val NATIVE_APP_ID = "webtvlive"
         private const val DESKTOP_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+        @Volatile
+        private var runtime: GeckoRuntime? = null
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -99,126 +98,128 @@ class MainActivity : AppCompatActivity() {
         enableImmersiveFullscreen()
         keepScreenOn()
 
-        webView = createWebView()
-        binding.webContainer.addView(
-            webView,
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT
-        )
-
         setupMenu()
 
         currentChannelIndex = restoreLastChannelIndex()
-        loadCurrentChannel()
+        createAndAttachGeckoView()
     }
 
-    // region WebView 构建
-    @SuppressLint("SetJavaScriptEnabled")
-    private fun createWebView(): WebView {
-        val wv = WebView(this)
-        wv.settings.apply {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            mediaPlaybackRequiresUserGesture = false   // 允许自动起播
-            // 不开 useWideViewPort/loadWithOverviewMode：桌面 UA 下它们会把整页缩放，
-            // 导致 100vw/100vh 与真实可视区不一致、视频铺不满。
-            userAgentString = DESKTOP_UA
-            // 允许 https 页面里加载 blob / 混合内容（直播流常见）
-            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-            javaScriptCanOpenWindowsAutomatically = true
-            @Suppress("DEPRECATION")
-            databaseEnabled = true
-        }
-        wv.setBackgroundColor(0xFF000000.toInt())
-
-        wv.addJavascriptInterface(JsBridge(), "AndroidTV")
-
-        wv.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(
-                view: WebView?, request: WebResourceRequest?
-            ): Boolean = false   // 站内跳转都在本 WebView 内完成
-
-            override fun onPageFinished(view: WebView?, url: String?) {
-                super.onPageFinished(view, url)
-                inject()   // 双保险：进度 100 之外再注入一次
+    // region GeckoView 浏览器内核
+    private fun createAndAttachGeckoView() {
+        val createdView = GeckoView(this)
+        val session = GeckoSession(
+            GeckoSessionSettings.Builder()
+                .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP)
+                .userAgentOverride(DESKTOP_UA)
+                // 保持桌面页面结构，但使用设备视口，避免 980px 桌面视口缩放后留下黑边。
+                .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
+                .allowJavascript(true)
+                .suspendMediaWhenInactive(true)
+                .build(),
+        )
+        session.contentDelegate = object : GeckoSession.ContentDelegate {
+            override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {
+                if (fullScreen) binding.loadingText.visibility = View.GONE
+                enableImmersiveFullscreen()
             }
 
-            override fun onReceivedSslError(
-                view: WebView?, handler: SslErrorHandler?, error: SslError?
-            ) {
-                // 直播源证书偶有问题，第一版放行以保证能播（后续可收紧）
-                handler?.proceed()
+            override fun onCrash(session: GeckoSession) {
+                Log.e(TAG, "GeckoView content process crashed")
             }
         }
-
-        wv.webChromeClient = object : WebChromeClient() {
-            override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                super.onProgressChanged(view, newProgress)
-                // 页面加载完只补一次注入；加载遮罩不在这里隐藏——
-                // 此刻网页往往还停在封面/播放按钮，得等视频真正开播（notifyVideoPlaying）再切走。
-                if (newProgress >= 100) {
-                    inject()
-                }
+        session.progressDelegate = object : GeckoSession.ProgressDelegate {
+            override fun onPageStart(session: GeckoSession, url: String) {
+                Log.i(TAG, "GeckoView page start: " + url)
             }
 
-            // 站点若触发原生全屏（H5 requestFullscreen），用容器兜底承接
-            override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
-                if (customView != null) {
-                    callback?.onCustomViewHidden()
-                    return
-                }
-                customView = view
-                customViewCallback = callback
-                binding.fullscreenContainer.addView(
-                    view,
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
+            override fun onPageStop(session: GeckoSession, success: Boolean) {
+                Log.i(TAG, "GeckoView page stop: success=" + success)
+            }
+        }
+        session.permissionDelegate = object : GeckoSession.PermissionDelegate {
+            override fun onContentPermissionRequest(
+                session: GeckoSession,
+                permission: GeckoSession.PermissionDelegate.ContentPermission,
+            ): GeckoResult<Int> {
+                val allowed = permission.permission ==
+                    GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE ||
+                    permission.permission ==
+                    GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE
+                return GeckoResult.fromValue(
+                    if (allowed) {
+                        GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
+                    } else {
+                        GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY
+                    },
                 )
-                binding.fullscreenContainer.visibility = View.VISIBLE
-                binding.webContainer.visibility = View.GONE
-                // 走原生全屏说明视频已在播放，撤掉加载遮罩
-                binding.loadingText.visibility = View.GONE
-                enableImmersiveFullscreen()
-            }
-
-            override fun onHideCustomView() {
-                binding.fullscreenContainer.removeAllViews()
-                binding.fullscreenContainer.visibility = View.GONE
-                binding.webContainer.visibility = View.VISIBLE
-                customView = null
-                customViewCallback?.onCustomViewHidden()
-                customViewCallback = null
-                enableImmersiveFullscreen()
             }
         }
-        return wv
+
+        val appRuntime = runtime ?: GeckoRuntime.create(
+            applicationContext,
+            GeckoRuntimeSettings.Builder()
+                .javaScriptEnabled(true)
+                .consoleOutput(true)
+                // 电视内存有限；关闭站点隔离和独立扩展进程，减少跨域直播页的子进程数量。
+                .fissionEnabled(false)
+                .extensionsProcessEnabled(false)
+                .build(),
+        ).also { runtime = it }
+
+        session.open(appRuntime)
+        session.setActive(true)
+        session.setFocused(true)
+        createdView.setSession(session)
+        geckoView = createdView
+        geckoSession = session
+        binding.webContainer.addView(
+            createdView,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+        )
+        installWebExtensionAndLoad(appRuntime, session)
     }
 
-    private fun inject() {
-        if (injectJs.isNotEmpty()) {
-            webView.evaluateJavascript(injectJs, null)
-        }
-    }
-
-    private fun readAssetJs(): String = try {
-        assets.open("default_js_template.js").bufferedReader().use { it.readText() }
-    } catch (e: Exception) {
-        ""
-    }
-    // endregion
-
-    // region JS -> Native 心跳
-    private inner class JsBridge {
-        @JavascriptInterface
-        fun notifyVideoPlaying() {
-            // 已在播放：隐藏加载提示（切回主线程）
-            runOnUiThread { binding.loadingText.visibility = View.GONE }
-        }
-
-        @JavascriptInterface
-        fun setVideoSize(width: Int, height: Int) {
-            // 第一版暂不使用尺寸；预留给后续「画面比例」功能
-        }
+    private fun installWebExtensionAndLoad(runtime: GeckoRuntime, session: GeckoSession) {
+        runtime.webExtensionController
+            .ensureBuiltIn(EXTENSION_LOCATION, EXTENSION_ID)
+            .accept(
+                { extension ->
+                    if (isFinishing || isDestroyed) return@accept
+                    if (extension == null) {
+                        Log.e(TAG, "GeckoView extension install returned null")
+                        loadCurrentChannel()
+                        return@accept
+                    }
+                    session.webExtensionController.setMessageDelegate(
+                        extension,
+                        object : WebExtension.MessageDelegate {
+                            override fun onMessage(
+                                nativeApp: String,
+                                message: Any,
+                                sender: WebExtension.MessageSender,
+                            ): GeckoResult<Any>? {
+                                val payload = message as? JSONObject
+                                when (payload?.optString("type")) {
+                                    "playing" -> runOnUiThread {
+                                        binding.loadingText.visibility = View.GONE
+                                    }
+                                    "diagnostic" -> Log.i(TAG, payload.optString("message"))
+                                }
+                                return null
+                            }
+                        },
+                        NATIVE_APP_ID,
+                    )
+                    Log.i(TAG, "GeckoView ready; built-in extension installed")
+                    loadCurrentChannel()
+                },
+                { error ->
+                    if (isFinishing || isDestroyed) return@accept
+                    Log.e(TAG, "Unable to install GeckoView extension", error)
+                    loadCurrentChannel()
+                },
+            )
     }
     // endregion
 
@@ -245,11 +246,11 @@ class MainActivity : AppCompatActivity() {
     // region 遥控器按键：菜单开合 / 上下换台 / 返回退出
     //
     // 关键：必须在 dispatchKeyEvent 里拦截，而不是 onKeyDown。
-    // onKeyDown 只是「焦点 View（WebView）没消费按键时」才回调的兜底；方向键会先进 WebView：
-    //  - 左/右 让 WebView 滚动页面 / 把焦点移进网页 —— 表现为「视频画面移动」；
-    //  - 焦点一旦进了网页，后续上/下也被 WebView 吃掉，传不到这里 —— 表现为「换台失灵」。
-    // 在 dispatchKeyEvent 提前吞掉这些键，WebView 永远拿不到，两个问题一并解决。
-    // 菜单展开时，同一批方向键改为在菜单内导航（此时 WebView 仍在后面正常播放）。
+    // onKeyDown 只是「焦点 View（GeckoView）没消费按键时」才回调的兜底；方向键会先进网页：
+    //  - 左/右让网页滚动或移动焦点 —— 表现为「视频画面移动」；
+    //  - 焦点一旦进了网页，后续上/下也可能被网页吃掉 —— 表现为「换台失灵」。
+    // 在 dispatchKeyEvent 提前吞掉这些键，浏览器永远拿不到，两个问题一并解决。
+    // 菜单展开时，同一批方向键改为在菜单内导航（此时 GeckoView 仍在后面正常播放）。
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val keyCode = event.keyCode
         if (isRemoteControlKey(keyCode)) {
@@ -282,7 +283,7 @@ class MainActivity : AppCompatActivity() {
             KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> switchChannel(-1)
             // OK/中央键：呼出侧边频道菜单
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> openMenu()
-            // 左/右：本 App 不做网页内导航，吞掉即可，防止 WebView 滚动页面 / 移动焦点
+            // 左/右：本 App 不做网页内导航，吞掉即可，防止网页滚动 / 移动焦点
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> { /* no-op：故意屏蔽 */ }
         }
     }
@@ -300,7 +301,7 @@ class MainActivity : AppCompatActivity() {
         uiHandler.postDelayed(loadChannelRunnable, CHANNEL_SWITCH_DEBOUNCE_MS)
     }
 
-    /** 加载当前下标对应的频道，先重置 WebView 再载入，避免上一路视频残留。 */
+    /** 加载当前下标对应的频道，先停止当前 GeckoSession 导航，避免上一路页面继续加载。 */
     private fun loadCurrentChannel() {
         // 首次加载可能绕过防抖直接进来，这里清一次待执行的防抖任务，避免重复加载
         uiHandler.removeCallbacks(loadChannelRunnable)
@@ -308,8 +309,8 @@ class MainActivity : AppCompatActivity() {
         saveLastChannelIndex(currentChannelIndex)
         binding.loadingText.visibility = View.VISIBLE
         showChannelName(channel.name)
-        webView.stopLoading()
-        webView.loadUrl(channel.url)
+        geckoSession?.stop()
+        geckoSession?.loadUri(channel.url)
     }
 
     /** 读取上次播放的频道下标；无记录或越界时回退到默认台。 */
@@ -473,25 +474,25 @@ class MainActivity : AppCompatActivity() {
     // region 生命周期
     override fun onPause() {
         super.onPause()
-        webView.onPause()
+        geckoSession?.setFocused(false)
+        geckoSession?.setActive(false)
     }
 
     override fun onResume() {
         super.onResume()
-        webView.onResume()
+        geckoSession?.setActive(true)
+        geckoSession?.setFocused(true)
         enableImmersiveFullscreen()
     }
 
     override fun onDestroy() {
         uiHandler.removeCallbacks(hideChannelNameRunnable)
         uiHandler.removeCallbacks(loadChannelRunnable)
+        geckoView?.releaseSession()
+        geckoSession?.close()
         binding.webContainer.removeAllViews()
-        webView.apply {
-            stopLoading()
-            loadUrl("about:blank")
-            removeJavascriptInterface("AndroidTV")
-            destroy()
-        }
+        geckoView = null
+        geckoSession = null
         super.onDestroy()
     }
     // endregion

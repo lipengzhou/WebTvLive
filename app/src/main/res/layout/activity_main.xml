@@ -6,13 +6,13 @@
     android:background="@android:color/black"
     android:keepScreenOn="true">
 
-    <!-- 官网直播页承载容器：WebView 在代码中创建后加入，避免 XML 预览 WebView 的兼容问题 -->
+    <!-- 官网直播页承载容器：GeckoView 在代码中创建后加入，避免依赖电视的旧系统 WebView -->
     <FrameLayout
         android:id="@+id/webContainer"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <!-- 网页触发 onShowCustomView 时的原生全屏视频容器（默认隐藏） -->
+    <!-- 保留的全屏视频兜底容器（GeckoView 当前通过页面样式直接全屏） -->
     <FrameLayout
         android:id="@+id/fullscreenContainer"
         android:layout_width="match_parent"
