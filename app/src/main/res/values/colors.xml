@@ -7,4 +7,16 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+
+    <!-- 侧边菜单配色 -->
+    <color name="menu_scrim">#00000000</color>
+    <color name="menu_category_bg">#F21A1A1A</color>
+    <color name="menu_channel_bg">#E6101010</color>
+    <!-- 当前所在列里被选中的行：高亮蓝 -->
+    <color name="menu_item_active">#FF2F80ED</color>
+    <!-- 非当前列里被选中的行（记忆位置）：暗一点的选中态 -->
+    <color name="menu_item_selected_dim">#40FFFFFF</color>
+    <color name="menu_text_primary">#FFFFFFFF</color>
+    <color name="menu_text_secondary">#B3FFFFFF</color>
+
 </resources>

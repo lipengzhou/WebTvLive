@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 频道列表项：右栏一行频道名。
+     行高与分类项(item_category)保持一致(52dp)+垂直居中，保证左右两列逐行对齐。 -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/channelItemName"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:minHeight="52dp"
+    android:gravity="center_vertical"
+    android:background="@drawable/menu_item_bg"
+    android:paddingHorizontal="20dp"
+    android:textColor="@color/menu_text_primary"
+    android:textSize="16sp"
+    android:maxLines="1"
+    android:ellipsize="end"
+    tools:text="CCTV-1 综合"
+    xmlns:tools="http://schemas.android.com/tools" />

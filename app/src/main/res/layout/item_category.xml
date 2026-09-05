@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 分类列表项：左栏一行分类名。
+     行高与频道项(item_channel)保持一致(52dp)+垂直居中，保证左右两列逐行对齐。 -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/categoryName"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:minHeight="52dp"
+    android:gravity="center_vertical"
+    android:background="@drawable/menu_item_bg"
+    android:paddingHorizontal="20dp"
+    android:textColor="@color/menu_text_primary"
+    android:textSize="18sp"
+    android:textStyle="bold"
+    android:maxLines="1"
+    android:ellipsize="end"
+    tools:text="CCTV"
+    xmlns:tools="http://schemas.android.com/tools" />

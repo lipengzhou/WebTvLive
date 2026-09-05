@@ -47,4 +47,37 @@
         android:textStyle="bold"
         android:visibility="gone" />
 
+    <!-- 侧边频道菜单（默认隐藏）：
+         贴左显示，只占屏幕左侧一部分，右侧留空让视频继续可见、继续播放。
+         左区 = 分类列表，右区 = 该分类下的频道列表，都是垂直滚动。 -->
+    <LinearLayout
+        android:id="@+id/menuPanel"
+        android:layout_width="wrap_content"
+        android:layout_height="match_parent"
+        android:layout_gravity="start"
+        android:orientation="horizontal"
+        android:visibility="gone">
+
+        <!-- 左：分类 -->
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/categoryList"
+            android:layout_width="180dp"
+            android:layout_height="match_parent"
+            android:background="@color/menu_category_bg"
+            android:paddingVertical="8dp"
+            android:clipToPadding="false"
+            android:scrollbars="none" />
+
+        <!-- 右：所选分类下的频道 -->
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/channelList"
+            android:layout_width="260dp"
+            android:layout_height="match_parent"
+            android:background="@color/menu_channel_bg"
+            android:paddingVertical="8dp"
+            android:clipToPadding="false"
+            android:scrollbars="none" />
+
+    </LinearLayout>
+
 </FrameLayout>
