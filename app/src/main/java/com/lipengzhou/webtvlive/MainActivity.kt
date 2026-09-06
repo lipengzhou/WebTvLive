@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.KeyEvent
+import android.view.SoundEffectConstants
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Toast
@@ -455,8 +456,11 @@ class MainActivity : AppCompatActivity() {
 
         binding.categoryList.layoutManager = LinearLayoutManager(this)
         binding.categoryList.adapter = categoryAdapter
+        // 遥控器长按会快速刷新旧/新选中行；关闭默认交叉淡变，避免高亮看起来闪烁。
+        binding.categoryList.itemAnimator = null
         binding.channelList.layoutManager = LinearLayoutManager(this)
         binding.channelList.adapter = channelAdapter
+        binding.channelList.itemAnimator = null
 
         categoryAdapter.submit(TvCatalog.categories.map { it.name }, keepIndex = 0)
     }
@@ -493,38 +497,54 @@ class MainActivity : AppCompatActivity() {
     private fun handleMenuKeyDown(keyCode: Int) {
         when (keyCode) {
             KeyEvent.KEYCODE_BACK -> closeMenu()
-            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> moveSelection(-1)
-            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> moveSelection(+1)
-            KeyEvent.KEYCODE_DPAD_LEFT -> focusColumn(COLUMN_CATEGORY)
-            KeyEvent.KEYCODE_DPAD_RIGHT -> focusColumn(COLUMN_CHANNEL)
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> confirmMenuSelection()
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> {
+                if (moveSelection(-1)) playMenuSound(SoundEffectConstants.NAVIGATION_UP)
+            }
+            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> {
+                if (moveSelection(+1)) playMenuSound(SoundEffectConstants.NAVIGATION_DOWN)
+            }
+            KeyEvent.KEYCODE_DPAD_LEFT -> {
+                if (focusColumn(COLUMN_CATEGORY)) {
+                    playMenuSound(SoundEffectConstants.NAVIGATION_LEFT)
+                }
+            }
+            KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                if (focusColumn(COLUMN_CHANNEL)) {
+                    playMenuSound(SoundEffectConstants.NAVIGATION_RIGHT)
+                }
+            }
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                if (confirmMenuSelection()) playMenuSound(SoundEffectConstants.CLICK)
+            }
         }
     }
 
-    /** 在当前活动列内上下移动选择（不循环，卡在首尾）。 */
-    private fun moveSelection(delta: Int) {
+    /** 在当前活动列内上下移动选择（不循环，卡在首尾）；返回选中项是否实际变化。 */
+    private fun moveSelection(delta: Int): Boolean {
         if (activeColumn == COLUMN_CATEGORY) {
             val size = TvCatalog.categories.size
             val next = (categoryAdapter.selectedIndex + delta).coerceIn(0, size - 1)
-            if (next == categoryAdapter.selectedIndex) return
+            if (next == categoryAdapter.selectedIndex) return false
             categoryAdapter.setSelected(next)
-            binding.categoryList.smoothScrollToPosition(next)
+            binding.categoryList.scrollToPosition(next)
             // 左列移动即预览：右列实时换成该分类的频道（默认选第一个），但不加载、不切台
             previewCategory(next)
         } else {
             val size = TvCatalog.categories[menuCategoryIndex].channels.size
             val next = (channelAdapter.selectedIndex + delta).coerceIn(0, size - 1)
-            if (next == channelAdapter.selectedIndex) return
+            if (next == channelAdapter.selectedIndex) return false
             channelAdapter.setSelected(next)
-            binding.channelList.smoothScrollToPosition(next)
+            binding.channelList.scrollToPosition(next)
         }
+        return true
     }
 
-    /** 切换活动列（左/右），刷新两列高亮。 */
-    private fun focusColumn(column: Int) {
-        if (activeColumn == column) return
+    /** 切换活动列（左/右），刷新两列高亮；返回活动列是否实际变化。 */
+    private fun focusColumn(column: Int): Boolean {
+        if (activeColumn == column) return false
         activeColumn = column
         syncColumnActive()
+        return true
     }
 
     /** 左列移动时把右列换成对应分类的频道预览（选中第一个），不影响正在播放的画面。 */
@@ -538,12 +558,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** OK：在分类列则跳到频道列；在频道列则选中并换台。 */
-    private fun confirmMenuSelection() {
+    private fun confirmMenuSelection(): Boolean {
         if (activeColumn == COLUMN_CATEGORY) {
             focusColumn(COLUMN_CHANNEL)
         } else {
             onChannelChosen(channelAdapter.selectedIndex)
         }
+        return true
+    }
+
+    /** 播放设备系统提供的菜单操作音，并自动遵循系统的按键音效设置。 */
+    private fun playMenuSound(soundConstant: Int) {
+        binding.menuPanel.playSoundEffect(soundConstant)
     }
 
     /** 触屏点击分类：切换预览分类并把焦点移到频道列。 */
