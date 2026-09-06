@@ -29,6 +29,7 @@
   var needsStyleRepair = false;
   var needsStructureRebuild = false;
   var enforcingVideoPolicy = false;
+  var lastReportedBlockedRequestCount = -1;
 
   function send(type, message) {
     try {
@@ -44,6 +45,26 @@
         for (var key in extra) payload[key] = extra[key];
       }
       nativePort.postMessage(payload);
+    } catch (e) {}
+  }
+
+  /** 把后台请求过滤统计转发到 Android 日志，便于确认规则生效和排查播放回归。 */
+  function reportResourceFilterStats() {
+    try {
+      var result = browser.runtime.sendMessage({ type: 'getResourceFilterStats' });
+      if (!result || !result.then) return;
+      result.then(function (stats) {
+        if (!stats || !stats.enabled || stats.total === lastReportedBlockedRequestCount) return;
+        lastReportedBlockedRequestCount = stats.total;
+        var counts = stats.counts || {};
+        send(
+          'diagnostic',
+          'Resource filter blocked ' + stats.total + ' requests' +
+            ' (artwork=' + (counts.catalogArtwork || 0) +
+            ', qr/footer=' + (counts.qrAndFooterArtwork || 0) +
+            ', prefetch=' + (counts.routePrefetch || 0) + ')'
+        );
+      }).catch(function () {});
     } catch (e) {}
   }
 
@@ -368,6 +389,7 @@
 
     playingNotified = true;
     sendPort('playing', { requestId: activePlaybackRequestId });
+    reportResourceFilterStats();
     var rect = video.getBoundingClientRect();
     var activeQuality = document.querySelector('.bei-list .item.active');
     send(
@@ -562,6 +584,7 @@
 
   send('diagnostic', 'Gecko event-driven adapter injected: ' + location.href);
   connectNativePort();
+  setTimeout(reportResourceFilterStats, 5000);
   domObserver.observe(document.documentElement, {
     childList: true,
     subtree: true,

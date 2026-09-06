@@ -80,6 +80,7 @@ adb -s 127.0.0.1:5555 logcat -d | grep -i "WebTvLive\|cctv\|Gecko\|MediaCodec"
 - 发出页内换台指令时立即显示全屏加载遮罩；WebExtension 必须确认央视频已替换旧 `<video>`，或复用的 `<video>` 触发了新一轮 `playing`，才发送带本次请求 ID 的 `playing` 隐藏遮罩，不能让旧频道或过期请求提前解除遮罩。
 - 每次播放器节点创建或换台重建后，WebExtension 会解除静音并持续把 `<video>.volume` 设为 `1`；不主动切换清晰度，使用官网默认/自适应策略。
 - WebExtension 不再每 500ms 全量扫描 DOM：频道和播放器发现由 `MutationObserver` 驱动，播放完成由 `playing` 等媒体事件驱动；仅在受控节点样式被官网改写时定向修复。
+- WebExtension 后台脚本会保守拦截已确认无关的频道封面、二维码/页脚图片与路由 chunk 推测性预取；频道 API、播放器脚本、WASM、媒体、鉴权、登录和统计请求默认放行。统计请求虽然与播放无关，但直接取消会触发官网未捕获的 Promise/CORS 错误，因此不作为默认优化。命中统计会以 `Resource filter blocked ...` 输出到 `WebTvLive` 日志。
 
 ### 侧边频道菜单（M1 首版）
 
