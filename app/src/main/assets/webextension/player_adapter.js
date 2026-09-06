@@ -2,14 +2,33 @@
   var MARK = 'data-webtvlive-fs';
   var KEEP = 'data-webtvlive-keep';
   var CLEARED = 'data-webtvlive-cleared';
+  var CHANNEL_SELECTOR =
+    '.tv-main-con-r-list-left-imga, .tv-main-con-r-list-left-imgb';
+  var SELECTED_CHANNEL_SELECTOR =
+    '.tv-main-con-r-list-left-imga.tvSelect, .tv-main-con-r-list-left-imgb.tvSelect';
+
   var playingNotified = false;
   var configuredVideo = null;
+  var fullscreenTarget = null;
   var pendingChannel = '';
+  var pendingPid = '';
   var nativePort = null;
   var videoBeforeChannelSwitch = null;
   var waitingForReplacementVideo = false;
   var pendingRequestId = 0;
   var activePlaybackRequestId = 0;
+  var directChannelToVerify = '';
+  var channelCache = Object.create(null);
+  var channelCacheDirty = true;
+  var managedAncestors = [];
+  var managedKept = [];
+  var managedHidden = [];
+  var reconcileScheduled = false;
+  var needsPlayerDiscovery = true;
+  var needsChannelWork = true;
+  var needsStyleRepair = false;
+  var needsStructureRebuild = false;
+  var enforcingVideoPolicy = false;
 
   function send(type, message) {
     try {
@@ -28,19 +47,27 @@
     } catch (e) {}
   }
 
-  /**
-   * 建立 App <-> 页面持久连接。Android 端通过此 Port 下发频道名，页面直接点击央视频
-   * 已渲染的频道项，让网站自己的 Vue 逻辑局部重建播放器，避免整页 loadUri。
-   */
+  function scheduleReconcile(playerDiscovery, channelWork, styleRepair, structureRebuild) {
+    needsPlayerDiscovery = needsPlayerDiscovery || !!playerDiscovery;
+    needsChannelWork = needsChannelWork || !!channelWork;
+    needsStyleRepair = needsStyleRepair || !!styleRepair;
+    needsStructureRebuild = needsStructureRebuild || !!structureRebuild;
+    if (reconcileScheduled) return;
+    reconcileScheduled = true;
+    requestAnimationFrame(reconcile);
+  }
+
+  /** 建立 App <-> 页面持久连接，通过 Port 接收页内换台请求。 */
   function connectNativePort() {
     try {
       nativePort = browser.runtime.connectNative('webtvlive');
       nativePort.onMessage.addListener(function (message) {
-        if (message && message.type === 'switchChannel' && message.channel) {
-          pendingChannel = String(message.channel);
-          pendingRequestId = Number(message.requestId) || 0;
-          selectYangshipinChannel();
-        }
+        if (!message || message.type !== 'switchChannel' || !message.channel) return;
+        pendingChannel = String(message.channel);
+        pendingPid = String(message.pid || '');
+        pendingRequestId = Number(message.requestId) || 0;
+        if (!activateDirectChannel()) selectYangshipinChannel();
+        scheduleReconcile(true, true, false, false);
       });
       nativePort.onDisconnect.addListener(function () {
         nativePort = null;
@@ -51,101 +78,142 @@
     }
   }
 
-  function setImp(el, key, value) {
-    try { el.style.setProperty(key, value, 'important'); } catch (e) {}
-  }
-
-  send('diagnostic', 'Gecko adapter injected: ' + location.href);
-  connectNativePort();
-
   function getYangshipinChannelName(element) {
     var source = element.querySelector('span') || element;
-    var clone = source.cloneNode(true);
-    var tags = clone.querySelectorAll('.tv-main-con-r-list-left-tag');
-    for (var i = 0; i < tags.length; i++) tags[i].remove();
-    return (clone.textContent || '').trim();
+    var text = '';
+    for (var i = 0; i < source.childNodes.length; i++) {
+      var child = source.childNodes[i];
+      if (child.nodeType === Node.TEXT_NODE) {
+        text += child.textContent || '';
+      } else if (
+        child.nodeType === Node.ELEMENT_NODE &&
+        !child.classList.contains('tv-main-con-r-list-left-tag')
+      ) {
+        text += child.textContent || '';
+      }
+    }
+    return text.trim();
+  }
+
+  function rebuildChannelCache() {
+    channelCache = Object.create(null);
+    var items = document.querySelectorAll(CHANNEL_SELECTOR);
+    for (var i = 0; i < items.length; i++) {
+      var name = getYangshipinChannelName(items[i]);
+      if (name) channelCache[name] = items[i];
+    }
+    channelCacheDirty = false;
+  }
+
+  function findChannelElement(name) {
+    if (channelCacheDirty) rebuildChannelCache();
+    var item = channelCache[name];
+    if (item && item.isConnected) return item;
+
+    // 页面可能复用同一批 DOM 更新频道名；一次请求最多在这里补建一次缓存。
+    channelCacheDirty = true;
+    rebuildChannelCache();
+    item = channelCache[name];
+    return item && item.isConnected ? item : null;
+  }
+
+  /** 首次启动已通过官网 ?pid=... 直达目标频道，先绑定本次 requestId。 */
+  function activateDirectChannel() {
+    if (!pendingPid || location.hostname.indexOf('yangshipin.cn') < 0) return false;
+    var currentPid = '';
+    try { currentPid = new URLSearchParams(location.search).get('pid') || ''; } catch (e) {}
+    if (currentPid !== pendingPid) return false;
+
+    directChannelToVerify = pendingChannel;
+    pendingChannel = '';
+    pendingPid = '';
+    activePlaybackRequestId = pendingRequestId;
+    pendingRequestId = 0;
+    playingNotified = false;
+    videoBeforeChannelSwitch = null;
+    waitingForReplacementVideo = false;
+    send('diagnostic', 'Yangshipin direct channel requested: ' + directChannelToVerify);
+    return true;
+  }
+
+  /** pid 可能被官网调整；频道列表出现后核对，不匹配则回退到按名称点击。 */
+  function verifyDirectChannel() {
+    if (!directChannelToVerify) return true;
+    var selected = document.querySelector(SELECTED_CHANNEL_SELECTOR);
+    if (!selected) return false;
+
+    var expectedChannel = directChannelToVerify;
+    directChannelToVerify = '';
+    if (getYangshipinChannelName(selected) === expectedChannel) {
+      sendPort('channelSelected', { channel: expectedChannel });
+      send('diagnostic', 'Yangshipin direct channel verified: ' + expectedChannel);
+      maybeNotifyPlaying();
+      return true;
+    }
+
+    pendingChannel = expectedChannel;
+    pendingRequestId = activePlaybackRequestId;
+    send('diagnostic', 'Yangshipin pid mismatch; falling back to channel click: ' + expectedChannel);
+    return selectYangshipinChannel();
   }
 
   function selectYangshipinChannel() {
     if (!pendingChannel || location.hostname.indexOf('yangshipin.cn') < 0) return false;
+    var item = findChannelElement(pendingChannel);
+    if (!item) return false;
 
-    var items = document.querySelectorAll(
-      '.tv-main-con-r-list-left-imga, .tv-main-con-r-list-left-imgb'
-    );
-    for (var i = 0; i < items.length; i++) {
-      if (getYangshipinChannelName(items[i]) !== pendingChannel) continue;
+    var selectedChannel = pendingChannel;
+    pendingChannel = '';
+    pendingPid = '';
+    directChannelToVerify = '';
+    activePlaybackRequestId = pendingRequestId;
+    pendingRequestId = 0;
+    playingNotified = false;
 
-      var selectedChannel = pendingChannel;
-      pendingChannel = '';
-      activePlaybackRequestId = pendingRequestId;
-      pendingRequestId = 0;
-      playingNotified = false;
-      configuredVideo = null;
-
-      // 如果本来就是目标频道，不需要重建播放器；否则记住旧 video。央视频点击频道后会
-      // 局部替换 video 节点，在新节点出现前绝不能用仍在播放的旧节点回报 playing。
-      if (items[i].classList.contains('tvSelect')) {
-        videoBeforeChannelSwitch = null;
-        waitingForReplacementVideo = false;
-      } else {
-        videoBeforeChannelSwitch = pickVideo();
-        waitingForReplacementVideo = videoBeforeChannelSwitch !== null;
-        if (videoBeforeChannelSwitch) {
-          // 央视频有两种实现：有时替换整个 video 节点，有时复用同一节点重新装载媒体。
-          // 对复用节点的情况，下一次 playing 事件就是新频道真正有画面的可靠信号。
-          var observedVideo = videoBeforeChannelSwitch;
-          var observedRequestId = activePlaybackRequestId;
-          observedVideo.addEventListener('playing', function () {
-            if (
-              waitingForReplacementVideo &&
-              activePlaybackRequestId === observedRequestId &&
-              pickVideo() === observedVideo
-            ) {
-              waitingForReplacementVideo = false;
-              videoBeforeChannelSwitch = null;
-              send('diagnostic', 'Yangshipin reused video started playing');
-            }
-          }, { once: true });
-        }
-        items[i].click();
-      }
-      sendPort('channelSelected', { channel: selectedChannel });
-      send('diagnostic', 'Yangshipin in-page switch: ' + selectedChannel);
-      return true;
+    if (item.classList.contains('tvSelect')) {
+      videoBeforeChannelSwitch = null;
+      waitingForReplacementVideo = false;
+    } else {
+      videoBeforeChannelSwitch = configuredVideo && configuredVideo.isConnected
+        ? configuredVideo
+        : pickVideo();
+      waitingForReplacementVideo = videoBeforeChannelSwitch !== null;
+      item.click();
     }
-
-    // 首页内容异步渲染；保留 pendingChannel，由 maintain() 继续重试。
-    return false;
-  }
-
-  function selectBlueLightQuality() {
-    var items = document.querySelectorAll('.bei-list .item');
-    for (var i = 0; i < items.length; i++) {
-      if ((items[i].textContent || '').trim() !== '蓝光 1080P') continue;
-      if (!items[i].classList.contains('active')) items[i].click();
-      return true;
-    }
-    return false;
+    sendPort('channelSelected', { channel: selectedChannel });
+    send('diagnostic', 'Yangshipin in-page switch: ' + selectedChannel);
+    return true;
   }
 
   function pickVideo() {
     var videos = document.querySelectorAll('video');
+    if (!videos.length) return null;
+    if (videos.length === 1) return videos[0];
+
     var best = null;
     var bestScore = -1;
     for (var i = 0; i < videos.length; i++) {
       var video = videos[i];
+      // 换台期间只要出现不同于旧播放器的新节点，就优先选择新节点。
+      var replacementBonus = waitingForReplacementVideo && video !== videoBeforeChannelSwitch
+        ? 10000000
+        : 0;
       var rect = video.getBoundingClientRect();
-      var score = rect.width * rect.height + (video.readyState >= 2 ? 2000000 : 0) + (!video.paused ? 1000000 : 0);
+      var score = replacementBonus + rect.width * rect.height +
+        (video.readyState >= 2 ? 2000000 : 0) + (!video.paused ? 1000000 : 0);
       if (score > bestScore) {
         bestScore = score;
         best = video;
       }
     }
-    return best || (videos.length ? videos[0] : null);
+    return best;
   }
 
   function pickPlayerFrame() {
     var frames = document.querySelectorAll('iframe');
+    if (!frames.length) return null;
+    if (frames.length === 1) return frames[0];
+
     var best = null;
     var bestScore = -1;
     for (var i = 0; i < frames.length; i++) {
@@ -162,28 +230,48 @@
     return best;
   }
 
-  function prepareAncestors(video) {
+  function setImp(element, key, value) {
+    try { element.style.setProperty(key, value, 'important'); } catch (e) {}
+  }
+
+  function styleFullscreen(element) {
+    setImp(element, 'position', 'fixed');
+    setImp(element, 'left', '0px');
+    setImp(element, 'top', '0px');
+    setImp(element, 'right', '0px');
+    setImp(element, 'bottom', '0px');
+    setImp(element, 'width', '100vw');
+    setImp(element, 'height', '100vh');
+    setImp(element, 'max-width', 'none');
+    setImp(element, 'max-height', 'none');
+    setImp(element, 'margin', '0px');
+    setImp(element, 'padding', '0px');
+    setImp(element, 'border', '0px');
+    setImp(element, 'z-index', '2147483647');
+    setImp(element, 'background', 'rgb(0, 0, 0)');
+    setImp(element, 'transform', 'none');
+  }
+
+  function rebuildFullscreenState(target) {
+    styleObserver.disconnect();
     var previous = document.querySelectorAll('[' + KEEP + ']');
     for (var i = 0; i < previous.length; i++) previous[i].removeAttribute(KEEP);
 
-    var node = video;
+    managedAncestors = [];
+    managedKept = [];
+    var node = target;
     while (node && node !== document.documentElement) {
       node.setAttribute(KEEP, '1');
-      if (node !== video && node.nodeType === 1) {
-        var style = getComputedStyle(node);
-        if (style.transform !== 'none') setImp(node, 'transform', 'none');
-        if (style.filter !== 'none') setImp(node, 'filter', 'none');
-        if (style.perspective !== 'none') setImp(node, 'perspective', 'none');
-        setImp(node, 'overflow', 'visible');
+      managedKept.push(node);
+      if (node !== target && node.nodeType === Node.ELEMENT_NODE) {
+        managedAncestors.push(node);
       }
       node = node.parentElement;
     }
-  }
 
-  function hideSiblings() {
     var kept = document.querySelectorAll('[' + KEEP + ']');
-    for (var i = 0; i < kept.length; i++) {
-      var parent = kept[i].parentElement;
+    for (var k = 0; k < kept.length; k++) {
+      var parent = kept[k].parentElement;
       if (!parent) continue;
       var children = parent.children;
       for (var j = 0; j < children.length; j++) {
@@ -194,91 +282,292 @@
             element.style.removeProperty('display');
             element.removeAttribute(CLEARED);
           }
-          setImp(element, 'visibility', 'visible');
         } else if (!element.hasAttribute(CLEARED)) {
-          setImp(element, 'display', 'none');
           element.setAttribute(CLEARED, '1');
         }
       }
     }
+    managedHidden = Array.prototype.slice.call(
+      document.querySelectorAll('[' + CLEARED + ']')
+    );
+    fullscreenTarget = target;
+    applyManagedStyles();
   }
 
-  function styleFullscreen(element) {
-    setImp(element, 'position', 'fixed');
-    setImp(element, 'left', '0');
-    setImp(element, 'top', '0');
-    setImp(element, 'right', '0');
-    setImp(element, 'bottom', '0');
-    setImp(element, 'width', '100vw');
-    setImp(element, 'height', '100vh');
-    setImp(element, 'max-width', 'none');
-    setImp(element, 'max-height', 'none');
-    setImp(element, 'margin', '0');
-    setImp(element, 'padding', '0');
-    setImp(element, 'border', '0');
-    setImp(element, 'z-index', '2147483647');
-    setImp(element, 'background', '#000');
-    setImp(element, 'transform', 'none');
-  }
-
-  function maintain() {
-    selectYangshipinChannel();
-
-    var video = pickVideo();
-    var target = video || pickPlayerFrame();
-    if (!target) return;
-
-    if (waitingForReplacementVideo && video && video !== videoBeforeChannelSwitch) {
-      waitingForReplacementVideo = false;
-      videoBeforeChannelSwitch = null;
-      send('diagnostic', 'Yangshipin replacement video detected');
-    }
+  /** 只修复已经锁定的少量节点，不再重新扫描整页。 */
+  function applyManagedStyles() {
+    if (!fullscreenTarget || !fullscreenTarget.isConnected) return;
+    styleObserver.disconnect();
 
     setImp(document.documentElement, 'overflow', 'hidden');
-    setImp(document.documentElement, 'background', '#000');
+    setImp(document.documentElement, 'background', 'rgb(0, 0, 0)');
     if (document.body) {
       setImp(document.body, 'overflow', 'hidden');
-      setImp(document.body, 'background', '#000');
+      setImp(document.body, 'background', 'rgb(0, 0, 0)');
     }
-    prepareAncestors(target);
-    hideSiblings();
-    styleFullscreen(target);
-
-    if (!video) return;
-    setImp(video, 'object-fit', 'contain');
-
-    if (configuredVideo !== video) {
-      configuredVideo = video;
-      playingNotified = false;
-      if (selectBlueLightQuality()) {
-        send('diagnostic', 'Yangshipin quality selected: 蓝光 1080P');
-      }
-    } else {
-      // 画质控件可能晚于 video 节点出现；未选中时重复检查是幂等的。
-      selectBlueLightQuality();
+    for (var i = 0; i < managedAncestors.length; i++) {
+      var ancestor = managedAncestors[i];
+      if (!ancestor.isConnected) continue;
+      var style = getComputedStyle(ancestor);
+      if (style.transform !== 'none') setImp(ancestor, 'transform', 'none');
+      if (style.filter !== 'none') setImp(ancestor, 'filter', 'none');
+      if (style.perspective !== 'none') setImp(ancestor, 'perspective', 'none');
+      setImp(ancestor, 'overflow', 'visible');
     }
-
-    video.autoplay = true;
-    video.setAttribute('playsinline', '');
-    if (video.paused) {
-      var promise = video.play();
-      if (promise && promise.catch) promise.catch(function () {});
+    for (var k = 0; k < managedKept.length; k++) {
+      if (managedKept[k].isConnected) setImp(managedKept[k], 'visibility', 'visible');
     }
+    for (var j = 0; j < managedHidden.length; j++) {
+      if (managedHidden[j].isConnected) setImp(managedHidden[j], 'display', 'none');
+    }
+    styleFullscreen(fullscreenTarget);
+    if (configuredVideo && configuredVideo.isConnected) {
+      setImp(configuredVideo, 'object-fit', 'contain');
+    }
+    observeManagedStyles();
+  }
+
+  function observeManagedStyles() {
+    var nodes = [document.documentElement, document.body, fullscreenTarget]
+      .concat(managedAncestors, managedKept, managedHidden);
+    var unique = [];
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      if (!node || !node.isConnected || unique.indexOf(node) >= 0) continue;
+      unique.push(node);
+      styleObserver.observe(node, {
+        attributes: true,
+        attributeFilter: ['style', 'width', 'height'],
+      });
+    }
+  }
+
+  function applyVideoPolicy(video) {
+    if (!video || enforcingVideoPolicy) return;
+    enforcingVideoPolicy = true;
     try {
+      video.autoplay = true;
+      video.setAttribute('playsinline', '');
+      if (video.paused && !waitingForReplacementVideo) {
+        var promise = video.play();
+        if (promise && promise.catch) promise.catch(function () {});
+      }
       video.muted = false;
       video.volume = 1;
     } catch (e) {}
-
-    if (!waitingForReplacementVideo && !playingNotified && !video.paused && !video.ended && video.readyState >= 3 && video.videoWidth > 0 && video.currentTime > 0) {
-      playingNotified = true;
-      sendPort('playing', { requestId: activePlaybackRequestId });
-      var rect = video.getBoundingClientRect();
-      var activeQuality = document.querySelector('.bei-list .item.active');
-      send('diagnostic', 'Gecko video playing: ' + video.videoWidth + 'x' + video.videoHeight + ', rect=' + Math.round(rect.width) + 'x' + Math.round(rect.height) + ', viewport=' + window.innerWidth + 'x' + window.innerHeight + ', volume=' + Math.round(video.volume * 100) + '%, muted=' + video.muted + ', quality=' + (activeQuality ? activeQuality.textContent.trim() : 'unknown') + ', url=' + location.href);
-    }
-    video.setAttribute(MARK, '1');
+    enforcingVideoPolicy = false;
   }
 
-  maintain();
-  setInterval(maintain, 500);
+  function maybeNotifyPlaying() {
+    var video = configuredVideo;
+    if (
+      !video || !video.isConnected || directChannelToVerify ||
+      waitingForReplacementVideo || playingNotified || video.paused || video.ended ||
+      video.readyState < 3 || video.videoWidth <= 0 || video.currentTime <= 0
+    ) return;
+
+    playingNotified = true;
+    sendPort('playing', { requestId: activePlaybackRequestId });
+    var rect = video.getBoundingClientRect();
+    var activeQuality = document.querySelector('.bei-list .item.active');
+    send(
+      'diagnostic',
+      'Gecko video playing: ' + video.videoWidth + 'x' + video.videoHeight +
+        ', rect=' + Math.round(rect.width) + 'x' + Math.round(rect.height) +
+        ', viewport=' + window.innerWidth + 'x' + window.innerHeight +
+        ', volume=' + Math.round(video.volume * 100) + '%, muted=' + video.muted +
+        ', quality=' + (activeQuality ? activeQuality.textContent.trim() : 'auto') +
+        ', url=' + location.href
+    );
+  }
+
+  function onVideoPlaying(event) {
+    if (event.currentTarget !== configuredVideo) return;
+    if (waitingForReplacementVideo && configuredVideo === videoBeforeChannelSwitch) {
+      waitingForReplacementVideo = false;
+      videoBeforeChannelSwitch = null;
+      send('diagnostic', 'Yangshipin reused video started playing');
+    }
+    applyVideoPolicy(configuredVideo);
+    maybeNotifyPlaying();
+  }
+
+  function onVideoReady(event) {
+    if (event.currentTarget !== configuredVideo) return;
+    applyVideoPolicy(configuredVideo);
+    maybeNotifyPlaying();
+  }
+
+  function onVideoReset(event) {
+    if (event.currentTarget !== configuredVideo) return;
+    playingNotified = false;
+    scheduleReconcile(true, false, false, false);
+  }
+
+  function onVideoVolumeChange(event) {
+    if (event.currentTarget !== configuredVideo || enforcingVideoPolicy) return;
+    if (configuredVideo.muted || configuredVideo.volume !== 1) {
+      applyVideoPolicy(configuredVideo);
+    }
+  }
+
+  function onVideoPause(event) {
+    if (event.currentTarget !== configuredVideo || waitingForReplacementVideo) return;
+    applyVideoPolicy(configuredVideo);
+  }
+
+  function unbindVideo() {
+    if (!configuredVideo) return;
+    configuredVideo.removeEventListener('playing', onVideoPlaying);
+    configuredVideo.removeEventListener('loadedmetadata', onVideoReady);
+    configuredVideo.removeEventListener('canplay', onVideoReady);
+    configuredVideo.removeEventListener('timeupdate', maybeNotifyPlaying);
+    configuredVideo.removeEventListener('emptied', onVideoReset);
+    configuredVideo.removeEventListener('abort', onVideoReset);
+    configuredVideo.removeEventListener('resize', onVideoReady);
+    configuredVideo.removeEventListener('volumechange', onVideoVolumeChange);
+    configuredVideo.removeEventListener('pause', onVideoPause);
+    configuredVideo = null;
+  }
+
+  function bindVideo(video) {
+    if (configuredVideo === video) return;
+    unbindVideo();
+    configuredVideo = video;
+    playingNotified = false;
+    video.addEventListener('playing', onVideoPlaying);
+    video.addEventListener('loadedmetadata', onVideoReady);
+    video.addEventListener('canplay', onVideoReady);
+    video.addEventListener('timeupdate', maybeNotifyPlaying);
+    video.addEventListener('emptied', onVideoReset);
+    video.addEventListener('abort', onVideoReset);
+    video.addEventListener('resize', onVideoReady);
+    video.addEventListener('volumechange', onVideoVolumeChange);
+    video.addEventListener('pause', onVideoPause);
+    video.setAttribute(MARK, '1');
+    applyVideoPolicy(video);
+  }
+
+  function reconcile() {
+    reconcileScheduled = false;
+    var discoverPlayer = needsPlayerDiscovery;
+    var handleChannels = needsChannelWork;
+    var repairStyles = needsStyleRepair;
+    var rebuildStructure = needsStructureRebuild;
+    needsPlayerDiscovery = false;
+    needsChannelWork = false;
+    needsStyleRepair = false;
+    needsStructureRebuild = false;
+
+    if (handleChannels) {
+      verifyDirectChannel();
+      selectYangshipinChannel();
+    }
+
+    if (discoverPlayer) {
+      var video = pickVideo();
+      var target = video || pickPlayerFrame();
+      if (target && (target !== fullscreenTarget || !fullscreenTarget.isConnected || rebuildStructure)) {
+        rebuildFullscreenState(target);
+      } else if (target && repairStyles) {
+        applyManagedStyles();
+      }
+
+      if (video) {
+        if (waitingForReplacementVideo && video !== videoBeforeChannelSwitch) {
+          waitingForReplacementVideo = false;
+          videoBeforeChannelSwitch = null;
+          send('diagnostic', 'Yangshipin replacement video detected');
+        }
+        bindVideo(video);
+        applyVideoPolicy(video);
+        maybeNotifyPlaying();
+      } else if (configuredVideo && !configuredVideo.isConnected) {
+        unbindVideo();
+      }
+    } else if (repairStyles) {
+      applyManagedStyles();
+    }
+  }
+
+  function nodeMatchesOrContains(node, selector) {
+    if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
+    try { return node.matches(selector) || !!node.querySelector(selector); } catch (e) { return false; }
+  }
+
+  function nodeContainsCurrentTarget(node) {
+    if (!node || node.nodeType !== Node.ELEMENT_NODE || !fullscreenTarget) return false;
+    return node === fullscreenTarget || node.contains(fullscreenTarget);
+  }
+
+  var domObserver = new MutationObserver(function (mutations) {
+    var discoverPlayer = false;
+    var handleChannels = false;
+    var repairStyles = false;
+    var rebuildStructure = false;
+
+    for (var i = 0; i < mutations.length; i++) {
+      var mutation = mutations[i];
+      if (mutation.type === 'attributes') {
+        var target = mutation.target;
+        if (target.matches && target.matches(CHANNEL_SELECTOR)) handleChannels = true;
+        if (managedKept.indexOf(target) >= 0) repairStyles = true;
+        continue;
+      }
+      if (mutation.type === 'characterData') {
+        var parent = mutation.target.parentElement;
+        if (parent && parent.closest(CHANNEL_SELECTOR)) {
+          channelCacheDirty = true;
+          handleChannels = true;
+        }
+        continue;
+      }
+
+      if (managedKept.indexOf(mutation.target) >= 0) {
+        repairStyles = true;
+        rebuildStructure = true;
+      }
+      for (var j = 0; j < mutation.addedNodes.length; j++) {
+        var added = mutation.addedNodes[j];
+        if (nodeMatchesOrContains(added, 'video, iframe')) discoverPlayer = true;
+        if (nodeMatchesOrContains(added, CHANNEL_SELECTOR)) {
+          channelCacheDirty = true;
+          handleChannels = true;
+        }
+      }
+      for (var k = 0; k < mutation.removedNodes.length; k++) {
+        var removed = mutation.removedNodes[k];
+        if (nodeContainsCurrentTarget(removed) || nodeMatchesOrContains(removed, 'video, iframe')) {
+          discoverPlayer = true;
+        }
+        if (nodeMatchesOrContains(removed, CHANNEL_SELECTOR)) {
+          channelCacheDirty = true;
+          handleChannels = true;
+        }
+      }
+    }
+    if (discoverPlayer || handleChannels || repairStyles) {
+      scheduleReconcile(
+        discoverPlayer || rebuildStructure,
+        handleChannels,
+        repairStyles,
+        rebuildStructure
+      );
+    }
+  });
+
+  var styleObserver = new MutationObserver(function () {
+    scheduleReconcile(false, false, true, false);
+  });
+
+  send('diagnostic', 'Gecko event-driven adapter injected: ' + location.href);
+  connectNativePort();
+  domObserver.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class'],
+    characterData: true,
+  });
+  scheduleReconcile(true, true, false, false);
 })();

@@ -7,8 +7,9 @@
 - 一款「基于 GeckoView 的安卓直播电视 App」：内置 Firefox 内核打开各电视台**官方直播网页**，通过内置 WebExtension 把网页 `<video>` 铺满全屏，做成「像传统电视一样换台」的体验。
 - 语言 Kotlin，构建 Kotlin DSL + Version Catalog（`gradle/libs.versions.toml`），原生 XML View（不用 Compose）。
 - 核心文件：
-  - `app/src/main/java/com/lipengzhou/webtvlive/MainActivity.kt`：GeckoRuntime/GeckoSession 封装、央视频页内换台、遥控器按键、全屏/常亮。
-  - `app/src/main/assets/webextension/`：内置 WebExtension；幂等维护全屏样式、蓝光 1080P 与 100% 音量，并通过持久 native messaging Port 接收页内换台指令。
+  - `app/src/main/java/com/lipengzhou/webtvlive/WebTvLiveApplication.kt`：进程级 GeckoRuntime 创建与首次页面预热。
+  - `app/src/main/java/com/lipengzhou/webtvlive/MainActivity.kt`：GeckoSession、央视频页内换台、超时恢复、遥控器按键、全屏/常亮。
+  - `app/src/main/assets/webextension/`：内置 WebExtension；通过 DOM/媒体事件发现播放器和换台状态，按需维护全屏样式与 100% 音量，清晰度交给官网默认/自适应策略，并通过持久 native messaging Port 接收页内换台指令。
   - `app/src/main/res/layout/activity_main.xml`：黑底 FrameLayout + GeckoView 容器 + 频道名浮层。
 
 ## 构建（命令行）
@@ -75,9 +76,10 @@ adb -s 127.0.0.1:5555 logcat -d | grep -i "WebTvLive\|cctv\|Gecko\|MediaCodec"
 - **确定**（`DPAD_CENTER` / `ENTER`）：标准态=呼出左侧频道菜单；菜单态在分类列=跳到频道列，在频道列=选中并换台。
 - **左/右**（`DPAD_LEFT` / `DPAD_RIGHT`）：标准态屏蔽（防止 WebView 滚动页面/移焦点）；菜单态在「分类列 ↔ 频道列」间切换焦点。
 - **返回键**：菜单态=关闭菜单；标准态=2 秒内按两次退出。
-- 首次只加载 `https://www.yangshipin.cn/tv/home`；后续换台由 WebExtension 按频道名点击央视频页面中的频道项，局部重建播放器，不再 `stop()` / `loadUri()` 整页重载。
+- 首次按最近成功频道的 `pid` 直达 `https://www.yangshipin.cn/tv/home?pid=...`；WebExtension 会核对页面实际选中频道，`pid` 失效时回退到按频道名点击。后续换台仍在当前页面按频道名点击并局部重建播放器。
 - 发出页内换台指令时立即显示全屏加载遮罩；WebExtension 必须确认央视频已替换旧 `<video>`，或复用的 `<video>` 触发了新一轮 `playing`，才发送带本次请求 ID 的 `playing` 隐藏遮罩，不能让旧频道或过期请求提前解除遮罩。
-- 每次播放器节点创建或换台重建后，WebExtension 会选择「蓝光 1080P」、解除静音并持续把 `<video>.volume` 设为 `1`。
+- 每次播放器节点创建或换台重建后，WebExtension 会解除静音并持续把 `<video>.volume` 设为 `1`；不主动切换清晰度，使用官网默认/自适应策略。
+- WebExtension 不再每 500ms 全量扫描 DOM：频道和播放器发现由 `MutationObserver` 驱动，播放完成由 `playing` 等媒体事件驱动；仅在受控节点样式被官网改写时定向修复。
 
 ### 侧边频道菜单（M1 首版）
 

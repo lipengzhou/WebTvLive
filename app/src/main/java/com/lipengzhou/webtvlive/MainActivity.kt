@@ -3,6 +3,7 @@ package com.lipengzhou.webtvlive
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.KeyEvent
 import android.view.SoundEffectConstants
@@ -18,7 +19,6 @@ import com.lipengzhou.webtvlive.databinding.ActivityMainBinding
 import org.json.JSONObject
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
-import org.mozilla.geckoview.GeckoRuntimeSettings
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.GeckoView
@@ -41,6 +41,9 @@ class MainActivity : AppCompatActivity() {
     private var pageLoadInProgress = false
     private var channelSwitchRequestId = 0L
     private var waitingPlaybackRequestId: Long? = null
+    private var activityStartedAt = 0L
+    private var nextPlaybackAttemptId = 0L
+    private var playbackAttempt: PlaybackAttempt? = null
 
     // 返回键两次退出
     private var lastBackPressedTime = 0L
@@ -50,7 +53,8 @@ class MainActivity : AppCompatActivity() {
 
     // 当前频道下标（遥控器上/下切换）；无记录时默认 CCTV-13 新闻，保持与旧版一致。
     // 这里用的是「所有分类频道拉平后的一维下标」，见 TvCatalog.flatChannels。
-    private var currentChannelIndex = 13
+    private var currentChannelIndex = DEFAULT_CHANNEL_INDEX
+    private var lastSuccessfulChannelIndex = DEFAULT_CHANNEL_INDEX
 
     // region 侧边菜单状态
     // 菜单是否展开。菜单只是盖在视频上的左侧浮层，展开期间不碰 GeckoView，视频照常播放。
@@ -62,6 +66,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var categoryAdapter: MenuAdapter
     private lateinit var channelAdapter: MenuAdapter
+    private var menuInitialized = false
     // endregion
 
     // 主线程 Handler：控制频道名浮层自动隐藏、以及换台防抖
@@ -71,15 +76,42 @@ class MainActivity : AppCompatActivity() {
     }
     // 换台防抖：狂按遥控器时不每次都加载，停手后只对最终频道加载一次
     private val loadChannelRunnable = Runnable { loadCurrentChannel() }
+    private val playbackTimeoutRunnable = Runnable { handlePlaybackTimeout() }
+
+    private enum class PlaybackStage {
+        IN_PAGE,
+        DIRECT,
+        DIRECT_RETRY,
+        FALLBACK,
+    }
+
+    private data class PlaybackAttempt(
+        val id: Long,
+        val channelIndex: Int,
+        val stage: PlaybackStage,
+        val startedAt: Long,
+        var requestId: Long? = null,
+    )
 
     companion object {
         private const val BACK_EXIT_INTERVAL = 2000L
         private const val CHANNEL_NAME_SHOW_MS = 3000L
         // 换台防抖：停止按键 600ms 后才真正加载，避免连续切台把每个中间台都请求一遍被 CCTV 限流
         private const val CHANNEL_SWITCH_DEBOUNCE_MS = 600L
+        // 已加载页面内换台通常很快；超时后改用该频道的官网 pid 页面重新建链。
+        private const val IN_PAGE_PLAYBACK_TIMEOUT_MS = 18_000L
+        // 低性能电视冷启动实测正常首播也可能接近 30 秒，因此整页加载给更宽松的窗口。
+        private const val DIRECT_PLAYBACK_TIMEOUT_MS = 35_000L
+        // 页面资源已缓存后的同频道重试应明显更快，避免失败时继续长时间等待。
+        private const val DIRECT_RETRY_TIMEOUT_MS = 25_000L
+        private const val FALLBACK_PLAYBACK_TIMEOUT_MS = 30_000L
+        private const val DEFAULT_CHANNEL_INDEX = 13
+        private const val STABLE_FALLBACK_SITE_NAME = "CCTV9"
+        private const val SECONDARY_FALLBACK_SITE_NAME = "CCTV10"
         // 记住上次频道用的 SharedPreferences
         private const val PREFS_NAME = "webtvlive_prefs"
         private const val KEY_LAST_CHANNEL = "last_channel_index"
+        private const val KEY_LAST_SUCCESSFUL_CHANNEL = "last_successful_channel_index"
         // 侧边菜单两列
         private const val COLUMN_CATEGORY = 0
         private const val COLUMN_CHANNEL = 1
@@ -90,12 +122,10 @@ class MainActivity : AppCompatActivity() {
         private const val DESKTOP_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-
-        @Volatile
-        private var runtime: GeckoRuntime? = null
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        activityStartedAt = SystemClock.elapsedRealtime()
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -103,9 +133,9 @@ class MainActivity : AppCompatActivity() {
         enableImmersiveFullscreen()
         keepScreenOn()
 
-        setupMenu()
-
-        currentChannelIndex = restoreLastChannelIndex()
+        lastSuccessfulChannelIndex = restoreLastSuccessfulChannelIndex()
+        currentChannelIndex = lastSuccessfulChannelIndex
+        Log.i(TAG, "StartupTiming: activity_ready elapsed=${startupElapsed()}ms")
         createAndAttachGeckoView()
     }
 
@@ -124,7 +154,6 @@ class MainActivity : AppCompatActivity() {
         )
         session.contentDelegate = object : GeckoSession.ContentDelegate {
             override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {
-                if (fullScreen) binding.loadingText.visibility = View.GONE
                 enableImmersiveFullscreen()
             }
 
@@ -136,6 +165,9 @@ class MainActivity : AppCompatActivity() {
             override fun onPageStart(session: GeckoSession, url: String) {
                 pageLoadInProgress = true
                 Log.i(TAG, "GeckoView page start: " + url)
+                if (url.startsWith(TvCatalog.YANGSHIPIN_HOME_URL)) {
+                    Log.i(TAG, "StartupTiming: page_started elapsed=${startupElapsed()}ms")
+                }
             }
 
             override fun onPageStop(session: GeckoSession, success: Boolean) {
@@ -162,16 +194,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val appRuntime = runtime ?: GeckoRuntime.create(
-            applicationContext,
-            GeckoRuntimeSettings.Builder()
-                .javaScriptEnabled(true)
-                .consoleOutput(true)
-                // 电视内存有限；关闭站点隔离和独立扩展进程，减少跨域直播页的子进程数量。
-                .fissionEnabled(false)
-                .extensionsProcessEnabled(false)
-                .build(),
-        ).also { runtime = it }
+        val appRuntime = (application as WebTvLiveApplication).geckoRuntime
 
         session.open(appRuntime)
         session.setActive(true)
@@ -235,7 +258,11 @@ class MainActivity : AppCompatActivity() {
                         },
                         NATIVE_APP_ID,
                     )
-                    Log.i(TAG, "GeckoView ready; built-in extension installed")
+                    Log.i(
+                        TAG,
+                        "GeckoView ready; built-in extension installed; " +
+                            "elapsed=${startupElapsed()}ms",
+                    )
                     loadCurrentChannel()
                 },
                 { error ->
@@ -253,14 +280,39 @@ class MainActivity : AppCompatActivity() {
             "ready" -> runOnUiThread {
                 val activePort = port ?: extensionPort ?: return@runOnUiThread
                 extensionPort = activePort
-                sendChannelSwitch(activePort, TvCatalog.flatChannels[currentChannelIndex])
+                Log.i(TAG, "StartupTiming: extension_ready elapsed=${startupElapsed()}ms")
+                val directAttempt = playbackAttempt?.takeIf {
+                    it.channelIndex == currentChannelIndex &&
+                        it.stage != PlaybackStage.IN_PAGE
+                }
+                sendChannelSwitch(
+                    activePort,
+                    currentChannelIndex,
+                    reuseAttempt = directAttempt,
+                )
             }
             "playing" -> runOnUiThread {
                 val requestId = payload.optLong("requestId", -1L)
-                if (requestId == waitingPlaybackRequestId) {
+                val attempt = playbackAttempt
+                if (requestId == waitingPlaybackRequestId && attempt?.requestId == requestId) {
+                    uiHandler.removeCallbacks(playbackTimeoutRunnable)
                     waitingPlaybackRequestId = null
+                    playbackAttempt = null
+                    currentChannelIndex = attempt.channelIndex
+                    lastSuccessfulChannelIndex = attempt.channelIndex
+                    saveSuccessfulChannelIndex(attempt.channelIndex)
                     binding.loadingText.visibility = View.GONE
-                    Log.i(TAG, "Playback ready; loading overlay hidden: request=$requestId")
+                    Log.i(
+                        TAG,
+                        "Playback ready; loading overlay hidden: request=$requestId, " +
+                            "channel=${TvCatalog.flatChannels[attempt.channelIndex].siteName}",
+                    )
+                    Log.i(
+                        TAG,
+                        "StartupTiming: playback_ready total=${startupElapsed()}ms, " +
+                            "attempt=${SystemClock.elapsedRealtime() - attempt.startedAt}ms, " +
+                            "stage=${attempt.stage}",
+                    )
                 } else {
                     Log.i(
                         TAG,
@@ -367,62 +419,186 @@ class MainActivity : AppCompatActivity() {
     private fun loadCurrentChannel() {
         // 首次加载可能绕过防抖直接进来，这里清一次待执行的防抖任务，避免重复加载
         uiHandler.removeCallbacks(loadChannelRunnable)
-        val channel = TvCatalog.flatChannels[currentChannelIndex]
-        saveLastChannelIndex(currentChannelIndex)
-        showChannelName(channel.name)
+        cancelPlaybackAttempt()
+        showChannelName(TvCatalog.flatChannels[currentChannelIndex].name)
 
         val port = extensionPort
         if (port != null) {
-            sendChannelSwitch(port, channel)
+            sendChannelSwitch(port, currentChannelIndex)
             return
         }
 
-        // 首次启动或 Port 意外断开时才重新加载首页。正常换台不会走到这里。
-        binding.loadingText.visibility = View.VISIBLE
-        if (!pageLoadInProgress) {
-            geckoSession?.stop()
-            geckoSession?.loadUri(TvCatalog.YANGSHIPIN_HOME_URL)
-        }
+        // 首次启动直接进入目标频道页面，避免先初始化 CCTV-1、再重建目标播放器。
+        startDirectLoad(currentChannelIndex, PlaybackStage.DIRECT)
     }
 
-    private fun sendChannelSwitch(port: WebExtension.Port, channel: Channel) {
+    private fun sendChannelSwitch(
+        port: WebExtension.Port,
+        channelIndex: Int,
+        reuseAttempt: PlaybackAttempt? = null,
+    ) {
+        val channel = TvCatalog.flatChannels[channelIndex]
         try {
             // 央视频页内换台时旧 video 会继续播放一小段时间。先盖住旧画面，直到扩展确认
             // 网站已换成新的 video 节点且新频道真正开始播放，再由 playing 消息移除遮罩。
             val requestId = ++channelSwitchRequestId
+            val attempt = reuseAttempt ?: startPlaybackAttempt(
+                channelIndex = channelIndex,
+                stage = PlaybackStage.IN_PAGE,
+                timeoutMs = IN_PAGE_PLAYBACK_TIMEOUT_MS,
+            )
+            attempt.requestId = requestId
             waitingPlaybackRequestId = requestId
             binding.loadingText.visibility = View.VISIBLE
             port.postMessage(
                 JSONObject()
                     .put("type", "switchChannel")
                     .put("channel", channel.siteName)
+                    .put("pid", channel.pid)
                     .put("requestId", requestId),
             )
             Log.i(
                 TAG,
-                "Requested in-page channel switch: ${channel.siteName}, request=$requestId",
+                "Requested in-page channel switch: ${channel.siteName}, request=$requestId, " +
+                    "stage=${attempt.stage}",
             )
         } catch (error: Exception) {
             Log.e(TAG, "Unable to send channel switch through WebExtension port", error)
             if (extensionPort === port) extensionPort = null
-            binding.loadingText.visibility = View.VISIBLE
-            if (!pageLoadInProgress) {
-                geckoSession?.stop()
-                geckoSession?.loadUri(TvCatalog.YANGSHIPIN_HOME_URL)
-            }
+            startDirectLoad(channelIndex, PlaybackStage.DIRECT)
         }
     }
 
-    /** 读取上次播放的频道下标；无记录或越界时回退到默认台。 */
-    private fun restoreLastChannelIndex(): Int {
-        val saved = prefs.getInt(KEY_LAST_CHANNEL, currentChannelIndex)
-        return if (saved in TvCatalog.flatChannels.indices) saved else currentChannelIndex
+    private fun startDirectLoad(channelIndex: Int, stage: PlaybackStage) {
+        val channel = TvCatalog.flatChannels[channelIndex]
+        cancelPlaybackAttempt()
+        currentChannelIndex = channelIndex
+        extensionPort?.disconnect()
+        extensionPort = null
+        binding.loadingText.visibility = View.VISIBLE
+        val attempt = startPlaybackAttempt(
+            channelIndex = channelIndex,
+            stage = stage,
+            timeoutMs = when (stage) {
+                PlaybackStage.IN_PAGE -> IN_PAGE_PLAYBACK_TIMEOUT_MS
+                PlaybackStage.DIRECT -> DIRECT_PLAYBACK_TIMEOUT_MS
+                PlaybackStage.DIRECT_RETRY -> DIRECT_RETRY_TIMEOUT_MS
+                PlaybackStage.FALLBACK -> FALLBACK_PLAYBACK_TIMEOUT_MS
+            },
+        )
+        geckoSession?.stop()
+        geckoSession?.loadUri(TvCatalog.pageUrl(channel))
+        Log.i(
+            TAG,
+            "Direct channel page load: ${channel.siteName}, pid=${channel.pid}, " +
+                "stage=$stage, attempt=${attempt.id}",
+        )
     }
 
-    /** 持久化当前频道下标，供下次启动恢复。 */
-    private fun saveLastChannelIndex(index: Int) {
-        prefs.edit().putInt(KEY_LAST_CHANNEL, index).apply()
+    private fun startPlaybackAttempt(
+        channelIndex: Int,
+        stage: PlaybackStage,
+        timeoutMs: Long,
+    ): PlaybackAttempt {
+        cancelPlaybackAttempt()
+        val attempt = PlaybackAttempt(
+            id = ++nextPlaybackAttemptId,
+            channelIndex = channelIndex,
+            stage = stage,
+            startedAt = SystemClock.elapsedRealtime(),
+        )
+        playbackAttempt = attempt
+        uiHandler.postDelayed(playbackTimeoutRunnable, timeoutMs)
+        Log.i(
+            TAG,
+            "Playback attempt started: id=${attempt.id}, " +
+                "channel=${TvCatalog.flatChannels[channelIndex].siteName}, " +
+                "stage=$stage, timeout=${timeoutMs}ms",
+        )
+        return attempt
     }
+
+    private fun cancelPlaybackAttempt() {
+        uiHandler.removeCallbacks(playbackTimeoutRunnable)
+        playbackAttempt = null
+        waitingPlaybackRequestId = null
+    }
+
+    private fun handlePlaybackTimeout() {
+        val attempt = playbackAttempt ?: return
+        val channel = TvCatalog.flatChannels[attempt.channelIndex]
+        Log.w(
+            TAG,
+            "Playback timeout: id=${attempt.id}, channel=${channel.siteName}, " +
+                "stage=${attempt.stage}, elapsed=${SystemClock.elapsedRealtime() - attempt.startedAt}ms",
+        )
+        when (attempt.stage) {
+            PlaybackStage.IN_PAGE -> {
+                // 页内播放器可能进入无法恢复的媒体建链状态；只重载一次目标频道官网页面。
+                startDirectLoad(attempt.channelIndex, PlaybackStage.DIRECT)
+            }
+
+            PlaybackStage.DIRECT -> {
+                Toast.makeText(this, R.string.channel_timeout_retry, Toast.LENGTH_SHORT).show()
+                startDirectLoad(attempt.channelIndex, PlaybackStage.DIRECT_RETRY)
+            }
+
+            PlaybackStage.DIRECT_RETRY -> {
+                val fallbackIndex = fallbackChannelIndex(attempt.channelIndex)
+                if (fallbackIndex == attempt.channelIndex) {
+                    stopAutomaticRecovery()
+                } else {
+                    val fallback = TvCatalog.flatChannels[fallbackIndex]
+                    Toast.makeText(
+                        this,
+                        getString(R.string.channel_timeout_fallback, fallback.name),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    showChannelName(fallback.name)
+                    startDirectLoad(fallbackIndex, PlaybackStage.FALLBACK)
+                }
+            }
+
+            PlaybackStage.FALLBACK -> stopAutomaticRecovery()
+        }
+    }
+
+    private fun fallbackChannelIndex(failedIndex: Int): Int {
+        if (lastSuccessfulChannelIndex != failedIndex) return lastSuccessfulChannelIndex
+        val stableIndex = TvCatalog.indexOfSiteName(STABLE_FALLBACK_SITE_NAME)
+        if (stableIndex in TvCatalog.flatChannels.indices && stableIndex != failedIndex) {
+            return stableIndex
+        }
+        val secondaryIndex = TvCatalog.indexOfSiteName(SECONDARY_FALLBACK_SITE_NAME)
+        return if (secondaryIndex in TvCatalog.flatChannels.indices) secondaryIndex else failedIndex
+    }
+
+    private fun stopAutomaticRecovery() {
+        cancelPlaybackAttempt()
+        binding.loadingText.visibility = View.VISIBLE
+        Toast.makeText(this, R.string.channel_timeout_manual, Toast.LENGTH_LONG).show()
+        Log.e(TAG, "Automatic playback recovery exhausted; waiting for manual channel switch")
+    }
+
+    /** 读取最近一次真正收到 playing 的频道；兼容旧版本保存的频道下标。 */
+    private fun restoreLastSuccessfulChannelIndex(): Int {
+        val saved = if (prefs.contains(KEY_LAST_SUCCESSFUL_CHANNEL)) {
+            prefs.getInt(KEY_LAST_SUCCESSFUL_CHANNEL, DEFAULT_CHANNEL_INDEX)
+        } else {
+            prefs.getInt(KEY_LAST_CHANNEL, DEFAULT_CHANNEL_INDEX)
+        }
+        return if (saved in TvCatalog.flatChannels.indices) saved else DEFAULT_CHANNEL_INDEX
+    }
+
+    /** 只在目标频道真正出画面后持久化，避免失败频道污染下一次冷启动。 */
+    private fun saveSuccessfulChannelIndex(index: Int) {
+        prefs.edit()
+            .putInt(KEY_LAST_SUCCESSFUL_CHANNEL, index)
+            .putInt(KEY_LAST_CHANNEL, index)
+            .apply()
+    }
+
+    private fun startupElapsed(): Long = SystemClock.elapsedRealtime() - activityStartedAt
 
     /** 在屏幕角落短暂显示频道名，便于确认当前台。 */
     private fun showChannelName(name: String) {
@@ -446,6 +622,8 @@ class MainActivity : AppCompatActivity() {
     // region 侧边频道菜单
     /** 初始化左右两个列表：左=分类，右=当前分类下的频道。只建一次。 */
     private fun setupMenu() {
+        if (menuInitialized) return
+        menuInitialized = true
         categoryAdapter = MenuAdapter(
             itemLayoutRes = R.layout.item_category,
         ) { position -> onCategoryChosen(position) }
@@ -468,6 +646,7 @@ class MainActivity : AppCompatActivity() {
     /** 呼出菜单：把左右两列定位到「当前正在播放的频道」，右列聚焦，视频保持播放。 */
     private fun openMenu() {
         if (menuVisible) return
+        setupMenu()
         menuVisible = true
 
         val (catIndex, chIndex) = TvCatalog.locate(currentChannelIndex)
@@ -613,6 +792,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         uiHandler.removeCallbacks(hideChannelNameRunnable)
         uiHandler.removeCallbacks(loadChannelRunnable)
+        cancelPlaybackAttempt()
         extensionPort?.disconnect()
         extensionPort = null
         geckoView?.releaseSession()
