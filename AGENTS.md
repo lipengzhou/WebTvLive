@@ -76,6 +76,7 @@ adb -s 127.0.0.1:5555 logcat -d | grep -i "WebTvLive\|cctv\|Gecko\|MediaCodec"
 - **确定**（`DPAD_CENTER` / `ENTER`）：标准态=呼出左侧频道菜单；菜单态在分类列=跳到频道列，在频道列=选中并换台。
 - **左/右**（`DPAD_LEFT` / `DPAD_RIGHT`）：标准态屏蔽（防止 WebView 滚动页面/移焦点）；菜单态在「分类列 ↔ 频道列」间切换焦点。
 - **返回键**：菜单态=关闭菜单；标准态=2 秒内按两次退出。
+- **菜单键**（`MENU` / `SETTINGS` / `TV_CONTENTS_MENU`）：标准态=从右侧呼出系统设置；设置态=关闭设置；频道菜单态=切换到系统设置。
 - 首次按最近成功频道的 `pid` 直达 `https://www.yangshipin.cn/tv/home?pid=...`；WebExtension 会核对页面实际选中频道，`pid` 失效时回退到按频道名点击。后续换台仍在当前页面按频道名点击并局部重建播放器。
 - 发出页内换台指令时立即显示全屏加载遮罩；WebExtension 必须确认央视频已替换旧 `<video>`，或复用的 `<video>` 触发了新一轮 `playing`，才发送带本次请求 ID 的 `playing` 隐藏遮罩，不能让旧频道或过期请求提前解除遮罩。
 - 每次播放器节点创建或换台重建后，WebExtension 会解除静音并持续把 `<video>.volume` 设为 `1`；不主动切换清晰度，使用官网默认/自适应策略。
@@ -90,6 +91,13 @@ adb -s 127.0.0.1:5555 logcat -d | grep -i "WebTvLive\|cctv\|Gecko\|MediaCodec"
 - 菜单导航**不走系统焦点**（方向键被 `dispatchKeyEvent` 提前吞掉，进不了 RecyclerView）：`MenuAdapter` 按外部下标渲染高亮——活动列选中行=高亮蓝（`activated`），非活动列选中行=暗选中态（`selected`）。
 - 打开菜单会把左右两列定位到「当前正在播放的频道」；左列上下移动即实时预览右列频道（不加载、不切台），在频道列按确定才真正 `loadCurrentChannel`。
 - 调试按键：`adb ... input keyevent 23`=确定（开菜单/选中），`21`/`22`=左/右切列，`19`/`20`=上/下移动，`4`=返回（关菜单）。
+
+### 右侧系统设置面板
+
+- 遥控器菜单键呼出，贴屏幕右侧显示；左列是具体档位，右列是「画质增强」设置项。ADB 可用 `input keyevent 82` 模拟 `MENU`。
+- 当前设置项为「画质增强」，可选「原始 / 轻度增强 / 标准增强 / 强力增强」；上下选择、确定应用，当前生效档位带 `✓`。
+- 档位通过 `SharedPreferences` 持久化，并在 WebExtension Port 每次连接后重新下发；换台重建播放器节点时也会自动应用。
+- 增强使用 GeckoView 可稳定合成的 CSS 对比度、饱和度和亮度组合，不使用 WebGL，也不会改变视频源分辨率。Android GeckoView 的硬件解码视频叠加 SVG `feConvolveMatrix` 实测会黑屏，不能用于 App。
 
 ## 注意点 / 踩坑
 

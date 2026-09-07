@@ -30,6 +30,7 @@
   var needsStructureRebuild = false;
   var enforcingVideoPolicy = false;
   var lastReportedBlockedRequestCount = -1;
+  var videoEnhancementLevel = 'original';
 
   function send(type, message) {
     try {
@@ -83,7 +84,12 @@
     try {
       nativePort = browser.runtime.connectNative('webtvlive');
       nativePort.onMessage.addListener(function (message) {
-        if (!message || message.type !== 'switchChannel' || !message.channel) return;
+        if (!message) return;
+        if (message.type === 'setVideoEnhancement') {
+          setVideoEnhancement(message.level);
+          return;
+        }
+        if (message.type !== 'switchChannel' || !message.channel) return;
         pendingChannel = String(message.channel);
         pendingPid = String(message.pid || '');
         pendingRequestId = Number(message.requestId) || 0;
@@ -255,6 +261,72 @@
     try { element.style.setProperty(key, value, 'important'); } catch (e) {}
   }
 
+  function enhancementProfile(level) {
+    switch (level) {
+      case 'light': return { contrast: 1.03, saturation: 1.02, brightness: 1.00 };
+      case 'standard': return { contrast: 1.06, saturation: 1.03, brightness: 1.01 };
+      case 'strong': return { contrast: 1.10, saturation: 1.05, brightness: 1.02 };
+      default: return null;
+    }
+  }
+
+  /**
+   * 通过 GeckoView 可稳定走 GPU 合成的 CSS 色彩函数提升主观清晰度。
+   * Android GeckoView 的硬件解码视频叠加 SVG 卷积会黑屏，因此这里不使用 feConvolveMatrix。
+   */
+  function applyVideoEnhancement(video) {
+    if (!video) return;
+    var previousLevel = video.__webTvAppliedEnhancement;
+    if (video.__webTvOriginalFilter === undefined) {
+      video.__webTvOriginalFilter = video.style.getPropertyValue('filter');
+      video.__webTvOriginalFilterPriority = video.style.getPropertyPriority('filter');
+    }
+
+    var profile = enhancementProfile(videoEnhancementLevel);
+    if (!profile) {
+      if (video.__webTvOriginalFilter) {
+        video.style.setProperty(
+          'filter',
+          video.__webTvOriginalFilter,
+          video.__webTvOriginalFilterPriority || ''
+        );
+      } else {
+        video.style.removeProperty('filter');
+      }
+      video.__webTvAppliedEnhancement = videoEnhancementLevel;
+      if (previousLevel !== videoEnhancementLevel) {
+        send('diagnostic', 'Video filter updated: original');
+      }
+      return;
+    }
+
+    setImp(
+      video,
+      'filter',
+      'contrast(' + profile.contrast + ') ' +
+        'saturate(' + profile.saturation + ') ' +
+        'brightness(' + profile.brightness + ')'
+    );
+    video.__webTvAppliedEnhancement = videoEnhancementLevel;
+    if (previousLevel !== videoEnhancementLevel) {
+      send(
+        'diagnostic',
+        'Video filter updated: ' + videoEnhancementLevel +
+          ', filter=' + video.style.getPropertyValue('filter')
+      );
+    }
+  }
+
+  function setVideoEnhancement(level) {
+    videoEnhancementLevel = /^(original|light|standard|strong)$/.test(String(level))
+      ? String(level)
+      : 'original';
+    if (configuredVideo && configuredVideo.isConnected) {
+      applyVideoEnhancement(configuredVideo);
+    }
+    send('diagnostic', 'Video enhancement applied: ' + videoEnhancementLevel);
+  }
+
   function styleFullscreen(element) {
     setImp(element, 'position', 'fixed');
     setImp(element, 'left', '0px');
@@ -289,7 +361,6 @@
       }
       node = node.parentElement;
     }
-
     var kept = document.querySelectorAll('[' + KEEP + ']');
     for (var k = 0; k < kept.length; k++) {
       var parent = kept[k].parentElement;
@@ -344,6 +415,7 @@
     styleFullscreen(fullscreenTarget);
     if (configuredVideo && configuredVideo.isConnected) {
       setImp(configuredVideo, 'object-fit', 'contain');
+      applyVideoEnhancement(configuredVideo);
     }
     observeManagedStyles();
   }
@@ -375,6 +447,7 @@
       }
       video.muted = false;
       video.volume = 1;
+      applyVideoEnhancement(video);
     } catch (e) {}
     enforcingVideoPolicy = false;
   }

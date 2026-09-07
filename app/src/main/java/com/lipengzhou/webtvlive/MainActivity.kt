@@ -69,6 +69,15 @@ class MainActivity : AppCompatActivity() {
     private var menuInitialized = false
     // endregion
 
+    // region 右侧系统设置面板状态
+    private var settingsVisible = false
+    private var settingsInitialized = false
+    private var settingsActiveColumn = COLUMN_SETTING_VALUE
+    private lateinit var settingsCategoryAdapter: MenuAdapter
+    private lateinit var settingsValueAdapter: MenuAdapter
+    private var videoEnhancement = VideoEnhancement.ORIGINAL
+    // endregion
+
     // 主线程 Handler：控制频道名浮层自动隐藏、以及换台防抖
     private val uiHandler = Handler(Looper.getMainLooper())
     private val hideChannelNameRunnable = Runnable {
@@ -112,9 +121,12 @@ class MainActivity : AppCompatActivity() {
         private const val PREFS_NAME = "webtvlive_prefs"
         private const val KEY_LAST_CHANNEL = "last_channel_index"
         private const val KEY_LAST_SUCCESSFUL_CHANNEL = "last_successful_channel_index"
+        private const val KEY_VIDEO_ENHANCEMENT = "video_enhancement"
         // 侧边菜单两列
         private const val COLUMN_CATEGORY = 0
         private const val COLUMN_CHANNEL = 1
+        private const val COLUMN_SETTING_CATEGORY = 0
+        private const val COLUMN_SETTING_VALUE = 1
         private const val TAG = "WebTvLive"
         private const val EXTENSION_LOCATION = "resource://android/assets/webextension/"
         private const val EXTENSION_ID = "webtvlive@lipengzhou.com"
@@ -135,6 +147,7 @@ class MainActivity : AppCompatActivity() {
 
         lastSuccessfulChannelIndex = restoreLastSuccessfulChannelIndex()
         currentChannelIndex = lastSuccessfulChannelIndex
+        videoEnhancement = restoreVideoEnhancement()
         Log.i(TAG, "StartupTiming: activity_ready elapsed=${startupElapsed()}ms")
         createAndAttachGeckoView()
     }
@@ -281,6 +294,7 @@ class MainActivity : AppCompatActivity() {
                 val activePort = port ?: extensionPort ?: return@runOnUiThread
                 extensionPort = activePort
                 Log.i(TAG, "StartupTiming: extension_ready elapsed=${startupElapsed()}ms")
+                sendVideoEnhancement(activePort)
                 val directAttempt = playbackAttempt?.takeIf {
                     it.channelIndex == currentChannelIndex &&
                         it.stage != PlaybackStage.IN_PAGE
@@ -367,7 +381,11 @@ class MainActivity : AppCompatActivity() {
         if (isRemoteControlKey(keyCode)) {
             // 只在按下时执行动作；抬起事件也一并吞掉，避免只截按下、抬起漏给 WebView
             if (event.action == KeyEvent.ACTION_DOWN) {
-                if (menuVisible) handleMenuKeyDown(keyCode) else handleRemoteKeyDown(keyCode)
+                when {
+                    settingsVisible -> handleSettingsKeyDown(keyCode)
+                    menuVisible -> handleMenuKeyDown(keyCode)
+                    else -> handleRemoteKeyDown(keyCode)
+                }
             }
             return true
         }
@@ -380,7 +398,9 @@ class MainActivity : AppCompatActivity() {
         KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP,
         KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN,
         KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
-        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> true
+        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
+        KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_SETTINGS,
+        KeyEvent.KEYCODE_TV_CONTENTS_MENU -> true
         else -> false
     }
 
@@ -394,6 +414,9 @@ class MainActivity : AppCompatActivity() {
             KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> switchChannel(-1)
             // OK/中央键：呼出侧边频道菜单
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> openMenu()
+            // MENU/设置键：从右侧呼出系统设置面板
+            KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_SETTINGS,
+            KeyEvent.KEYCODE_TV_CONTENTS_MENU -> openSettings()
             // 左/右：本 App 不做网页内导航，吞掉即可，防止网页滚动 / 移动焦点
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> { /* no-op：故意屏蔽 */ }
         }
@@ -466,6 +489,21 @@ class MainActivity : AppCompatActivity() {
             Log.e(TAG, "Unable to send channel switch through WebExtension port", error)
             if (extensionPort === port) extensionPort = null
             startDirectLoad(channelIndex, PlaybackStage.DIRECT)
+        }
+    }
+
+    /** 把当前画质增强档位同步给页面扩展；扩展会对现有及后续重建的 video 持续应用。 */
+    private fun sendVideoEnhancement(port: WebExtension.Port? = extensionPort) {
+        if (port == null) return
+        try {
+            port.postMessage(
+                JSONObject()
+                    .put("type", "setVideoEnhancement")
+                    .put("level", videoEnhancement.wireValue),
+            )
+            Log.i(TAG, "Video enhancement requested: ${videoEnhancement.wireValue}")
+        } catch (error: Exception) {
+            Log.e(TAG, "Unable to send video enhancement through WebExtension port", error)
         }
     }
 
@@ -598,6 +636,9 @@ class MainActivity : AppCompatActivity() {
             .apply()
     }
 
+    private fun restoreVideoEnhancement(): VideoEnhancement =
+        VideoEnhancement.fromWireValue(prefs.getString(KEY_VIDEO_ENHANCEMENT, null))
+
     private fun startupElapsed(): Long = SystemClock.elapsedRealtime() - activityStartedAt
 
     /** 在屏幕角落短暂显示频道名，便于确认当前台。 */
@@ -646,6 +687,7 @@ class MainActivity : AppCompatActivity() {
     /** 呼出菜单：把左右两列定位到「当前正在播放的频道」，右列聚焦，视频保持播放。 */
     private fun openMenu() {
         if (menuVisible) return
+        closeSettings()
         setupMenu()
         menuVisible = true
 
@@ -676,6 +718,11 @@ class MainActivity : AppCompatActivity() {
     private fun handleMenuKeyDown(keyCode: Int) {
         when (keyCode) {
             KeyEvent.KEYCODE_BACK -> closeMenu()
+            KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_SETTINGS,
+            KeyEvent.KEYCODE_TV_CONTENTS_MENU -> {
+                closeMenu()
+                openSettings()
+            }
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> {
                 if (moveSelection(-1)) playMenuSound(SoundEffectConstants.NAVIGATION_UP)
             }
@@ -772,6 +819,121 @@ class MainActivity : AppCompatActivity() {
     private fun syncColumnActive() {
         categoryAdapter.setColumnActive(activeColumn == COLUMN_CATEGORY)
         channelAdapter.setColumnActive(activeColumn == COLUMN_CHANNEL)
+    }
+    // endregion
+
+    // region 右侧系统设置面板
+    private fun setupSettings() {
+        if (settingsInitialized) return
+        settingsInitialized = true
+        settingsCategoryAdapter = MenuAdapter(R.layout.item_category) {
+            focusSettingsColumn(COLUMN_SETTING_VALUE)
+        }
+        settingsValueAdapter = MenuAdapter(R.layout.item_channel) { position ->
+            selectVideoEnhancement(position)
+        }
+        binding.settingsCategoryList.layoutManager = LinearLayoutManager(this)
+        binding.settingsCategoryList.adapter = settingsCategoryAdapter
+        binding.settingsCategoryList.itemAnimator = null
+        binding.settingsValueList.layoutManager = LinearLayoutManager(this)
+        binding.settingsValueList.adapter = settingsValueAdapter
+        binding.settingsValueList.itemAnimator = null
+        settingsCategoryAdapter.submit(
+            listOf(getString(R.string.setting_video_enhancement)),
+            keepIndex = 0,
+        )
+    }
+
+    /** MENU 键呼出：定位到当前已生效档位，视频继续在面板后方播放。 */
+    private fun openSettings() {
+        if (settingsVisible) return
+        closeMenu()
+        setupSettings()
+        settingsVisible = true
+        settingsActiveColumn = COLUMN_SETTING_VALUE
+        val selected = VideoEnhancement.entries.indexOf(videoEnhancement)
+        settingsValueAdapter.submit(videoEnhancementLabels(), keepIndex = selected)
+        syncSettingsColumnActive()
+        binding.settingsPanel.visibility = View.VISIBLE
+        binding.settingsValueList.scrollToPosition(selected)
+    }
+
+    private fun closeSettings() {
+        if (!settingsVisible) return
+        settingsVisible = false
+        binding.settingsPanel.visibility = View.GONE
+    }
+
+    private fun handleSettingsKeyDown(keyCode: Int) {
+        when (keyCode) {
+            KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_SETTINGS,
+            KeyEvent.KEYCODE_TV_CONTENTS_MENU -> closeSettings()
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> {
+                if (moveSettingsSelection(-1)) playSettingsSound(SoundEffectConstants.NAVIGATION_UP)
+            }
+            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> {
+                if (moveSettingsSelection(+1)) {
+                    playSettingsSound(SoundEffectConstants.NAVIGATION_DOWN)
+                }
+            }
+            KeyEvent.KEYCODE_DPAD_LEFT -> {
+                if (focusSettingsColumn(COLUMN_SETTING_VALUE)) {
+                    playSettingsSound(SoundEffectConstants.NAVIGATION_LEFT)
+                }
+            }
+            KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                if (focusSettingsColumn(COLUMN_SETTING_CATEGORY)) {
+                    playSettingsSound(SoundEffectConstants.NAVIGATION_RIGHT)
+                }
+            }
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                if (settingsActiveColumn == COLUMN_SETTING_CATEGORY) {
+                    focusSettingsColumn(COLUMN_SETTING_VALUE)
+                } else {
+                    selectVideoEnhancement(settingsValueAdapter.selectedIndex)
+                }
+                playSettingsSound(SoundEffectConstants.CLICK)
+            }
+        }
+    }
+
+    private fun moveSettingsSelection(delta: Int): Boolean {
+        if (settingsActiveColumn == COLUMN_SETTING_CATEGORY) return false
+        val next = (settingsValueAdapter.selectedIndex + delta)
+            .coerceIn(0, VideoEnhancement.entries.lastIndex)
+        if (next == settingsValueAdapter.selectedIndex) return false
+        settingsValueAdapter.setSelected(next)
+        binding.settingsValueList.scrollToPosition(next)
+        return true
+    }
+
+    private fun focusSettingsColumn(column: Int): Boolean {
+        if (settingsActiveColumn == column) return false
+        settingsActiveColumn = column
+        syncSettingsColumnActive()
+        return true
+    }
+
+    private fun syncSettingsColumnActive() {
+        settingsCategoryAdapter.setColumnActive(settingsActiveColumn == COLUMN_SETTING_CATEGORY)
+        settingsValueAdapter.setColumnActive(settingsActiveColumn == COLUMN_SETTING_VALUE)
+    }
+
+    private fun selectVideoEnhancement(position: Int) {
+        val selected = VideoEnhancement.entries.getOrNull(position) ?: return
+        videoEnhancement = selected
+        prefs.edit().putString(KEY_VIDEO_ENHANCEMENT, selected.wireValue).apply()
+        settingsValueAdapter.submit(videoEnhancementLabels(), keepIndex = position)
+        settingsValueAdapter.setColumnActive(settingsActiveColumn == COLUMN_SETTING_VALUE)
+        sendVideoEnhancement()
+    }
+
+    private fun videoEnhancementLabels(): List<String> = VideoEnhancement.entries.map { level ->
+        getString(level.labelRes) + if (level == videoEnhancement) "  ✓" else ""
+    }
+
+    private fun playSettingsSound(soundConstant: Int) {
+        binding.settingsPanel.playSoundEffect(soundConstant)
     }
     // endregion
 

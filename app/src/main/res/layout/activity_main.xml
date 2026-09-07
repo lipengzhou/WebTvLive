@@ -80,4 +80,34 @@
 
     </LinearLayout>
 
+    <!-- 系统设置面板（默认隐藏）：
+         从屏幕右侧展开。左列为当前设置的可选值，右列为设置项。 -->
+    <LinearLayout
+        android:id="@+id/settingsPanel"
+        android:layout_width="wrap_content"
+        android:layout_height="match_parent"
+        android:layout_gravity="end"
+        android:orientation="horizontal"
+        android:visibility="gone">
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/settingsValueList"
+            android:layout_width="220dp"
+            android:layout_height="match_parent"
+            android:background="@color/menu_category_bg"
+            android:clipToPadding="false"
+            android:paddingVertical="8dp"
+            android:scrollbars="none" />
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/settingsCategoryList"
+            android:layout_width="180dp"
+            android:layout_height="match_parent"
+            android:background="@color/menu_channel_bg"
+            android:clipToPadding="false"
+            android:paddingVertical="8dp"
+            android:scrollbars="none" />
+
+    </LinearLayout>
+
 </FrameLayout>
