@@ -4,13 +4,16 @@
 
 ## 项目速览
 
-- 一款「基于 GeckoView 的安卓直播电视 App」：内置 Firefox 内核打开各电视台**官方直播网页**，通过内置 WebExtension 把网页 `<video>` 铺满全屏，做成「像传统电视一样换台」的体验。
+- 一款「双内核安卓直播电视 App」：新系统可用系统原生 WebView 小包，老系统可用 GeckoView 稳定包。两种内核都打开各电视台**官方直播网页**，通过页面适配脚本把网页 `<video>` 铺满全屏，做成「像传统电视一样换台」的体验。
 - 语言 Kotlin，构建 Kotlin DSL + Version Catalog（`gradle/libs.versions.toml`），原生 XML View（不用 Compose）。
 - 核心文件：
-  - `app/src/main/java/com/lipengzhou/webtvlive/WebTvLiveApplication.kt`：进程级 GeckoRuntime 创建与首次页面预热。
-  - `app/src/main/java/com/lipengzhou/webtvlive/MainActivity.kt`：GeckoSession、央视频页内换台、超时恢复、遥控器按键、全屏/常亮。
-  - `app/src/main/assets/webextension/`：内置 WebExtension；通过 DOM/媒体事件发现播放器和换台状态，按需维护全屏样式与 100% 音量，清晰度交给官网默认/自适应策略，并通过持久 native messaging Port 接收页内换台指令。
-  - `app/src/main/res/layout/activity_main.xml`：黑底 FrameLayout + GeckoView 容器 + 频道名浮层。
+  - `app/src/main/java/com/lipengzhou/webtvlive/MainActivity.kt`：共享频道/菜单/设置/超时恢复/遥控器按键逻辑。
+  - `app/src/main/java/com/lipengzhou/webtvlive/BrowserEngine.kt`：共享浏览器内核接口。
+  - `app/src/gecko/java/com/lipengzhou/webtvlive/`：GeckoView 内核实现、进程级 GeckoRuntime 创建与首次页面预热。
+  - `app/src/webview/java/com/lipengzhou/webtvlive/`：系统原生 WebView 内核实现。
+  - `app/src/main/assets/webextension/player_adapter.js`：两种内核共用的页面播放器适配脚本；Gecko 通过 WebExtension 注入，WebView 通过 `evaluateJavascript` 注入。
+  - `app/src/gecko/assets/webextension/manifest.json` / `request_filter.js`：GeckoView 专用内置 WebExtension 清单和请求过滤后台脚本。
+  - `app/src/main/res/layout/activity_main.xml`：黑底 FrameLayout + 浏览器容器 + 频道名浮层。
 
 ## 构建（命令行）
 
@@ -20,12 +23,15 @@ macOS 上用 **Android Studio 内置 JBR** 作 `JAVA_HOME` 最稳（系统 JDK �
 export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 
 # 只编译 Kotlin（快速验证语法/编译）
-./gradlew :app:compileDebugKotlin -q
+./gradlew :app:compileGeckoDebugKotlin -q
+./gradlew :app:compileWebviewDebugKotlin -q
 
-# 打 debug APK（按 ABI 分包）
+# 打 debug APK（按内核 flavor + ABI 分包）
 ./gradlew :app:assembleDebug -q
-# 电视：app/build/outputs/apk/debug/app-armeabi-v7a-debug.apk
-# ARM64 模拟器：app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
+# GeckoView 32 位：app/build/outputs/apk/gecko/debug/app-gecko-armeabi-v7a-debug.apk
+# GeckoView 64 位：app/build/outputs/apk/gecko/debug/app-gecko-arm64-v8a-debug.apk
+# 原生 WebView 32 位：app/build/outputs/apk/webview/debug/app-webview-armeabi-v7a-debug.apk
+# 原生 WebView 64 位：app/build/outputs/apk/webview/debug/app-webview-arm64-v8a-debug.apk
 ```
 
 ## 在模拟器/真机上调试（无遥控器时的等效操作）
@@ -39,7 +45,7 @@ adb -s 127.0.0.1:5555 shell getprop ro.product.manufacturer   # -> Xiaomi
 adb -s 127.0.0.1:5555 shell getprop ro.build.version.sdk       # -> 32
 
 # 1) 安装新版（覆盖安装保留数据）
-adb -s 127.0.0.1:5555 install -r app/build/outputs/apk/debug/app-armeabi-v7a-debug.apk
+adb -s 127.0.0.1:5555 install -r app/build/outputs/apk/webview/debug/app-webview-arm64-v8a-debug.apk
 
 # 2) 启动 app
 adb -s 127.0.0.1:5555 shell monkey -p com.lipengzhou.webtvlive -c android.intent.category.LAUNCHER 1

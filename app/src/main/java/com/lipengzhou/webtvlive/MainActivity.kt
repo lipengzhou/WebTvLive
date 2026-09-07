@@ -8,7 +8,6 @@ import android.util.Log
 import android.view.KeyEvent
 import android.view.SoundEffectConstants
 import android.view.View
-import android.view.ViewGroup
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
@@ -16,13 +15,6 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.lipengzhou.webtvlive.databinding.ActivityMainBinding
-import org.json.JSONObject
-import org.mozilla.geckoview.GeckoResult
-import org.mozilla.geckoview.GeckoRuntime
-import org.mozilla.geckoview.GeckoSession
-import org.mozilla.geckoview.GeckoSessionSettings
-import org.mozilla.geckoview.GeckoView
-import org.mozilla.geckoview.WebExtension
 
 /**
  * WebTvLive：
@@ -35,9 +27,7 @@ import org.mozilla.geckoview.WebExtension
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
-    private var geckoView: GeckoView? = null
-    private var geckoSession: GeckoSession? = null
-    private var extensionPort: WebExtension.Port? = null
+    private lateinit var browserEngine: BrowserEngine
     private var pageLoadInProgress = false
     private var channelSwitchRequestId = 0L
     private var waitingPlaybackRequestId: Long? = null
@@ -57,7 +47,7 @@ class MainActivity : AppCompatActivity() {
     private var lastSuccessfulChannelIndex = DEFAULT_CHANNEL_INDEX
 
     // region 侧边菜单状态
-    // 菜单是否展开。菜单只是盖在视频上的左侧浮层，展开期间不碰 GeckoView，视频照常播放。
+    // 菜单是否展开。菜单只是盖在视频上的左侧浮层，展开期间不碰浏览器 View，视频照常播放。
     private var menuVisible = false
     // 当前活动列：左=分类，右=频道。方向键上/下作用在活动列上，左/右在两列间切换。
     private var activeColumn = COLUMN_CHANNEL
@@ -128,12 +118,6 @@ class MainActivity : AppCompatActivity() {
         private const val COLUMN_SETTING_CATEGORY = 0
         private const val COLUMN_SETTING_VALUE = 1
         private const val TAG = "WebTvLive"
-        private const val EXTENSION_LOCATION = "resource://android/assets/webextension/"
-        private const val EXTENSION_ID = "webtvlive@lipengzhou.com"
-        private const val NATIVE_APP_ID = "webtvlive"
-        private const val DESKTOP_UA =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -149,201 +133,85 @@ class MainActivity : AppCompatActivity() {
         currentChannelIndex = lastSuccessfulChannelIndex
         videoEnhancement = restoreVideoEnhancement()
         Log.i(TAG, "StartupTiming: activity_ready elapsed=${startupElapsed()}ms")
-        createAndAttachGeckoView()
+        createAndAttachBrowserEngine()
     }
 
-    // region GeckoView 浏览器内核
-    private fun createAndAttachGeckoView() {
-        val createdView = GeckoView(this)
-        val session = GeckoSession(
-            GeckoSessionSettings.Builder()
-                .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP)
-                .userAgentOverride(DESKTOP_UA)
-                // 保持桌面页面结构，但使用设备视口，避免 980px 桌面视口缩放后留下黑边。
-                .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
-                .allowJavascript(true)
-                .suspendMediaWhenInactive(true)
-                .build(),
-        )
-        session.contentDelegate = object : GeckoSession.ContentDelegate {
-            override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {
-                enableImmersiveFullscreen()
-            }
-
-            override fun onCrash(session: GeckoSession) {
-                Log.e(TAG, "GeckoView content process crashed")
-            }
-        }
-        session.progressDelegate = object : GeckoSession.ProgressDelegate {
-            override fun onPageStart(session: GeckoSession, url: String) {
-                pageLoadInProgress = true
-                Log.i(TAG, "GeckoView page start: " + url)
-                if (url.startsWith(TvCatalog.YANGSHIPIN_HOME_URL)) {
-                    Log.i(TAG, "StartupTiming: page_started elapsed=${startupElapsed()}ms")
+    // region 浏览器内核
+    private fun createAndAttachBrowserEngine() {
+        browserEngine = createBrowserEngine(this)
+        browserEngine.attach(
+            binding.webContainer,
+            object : BrowserEngine.Listener {
+                override fun onReady() {
+                    if (isFinishing || isDestroyed) return
+                    Log.i(TAG, "Browser engine ready; elapsed=${startupElapsed()}ms")
+                    browserEngine.applyVideoEnhancement(videoEnhancement)
+                    loadCurrentChannel()
                 }
-            }
 
-            override fun onPageStop(session: GeckoSession, success: Boolean) {
-                pageLoadInProgress = false
-                Log.i(TAG, "GeckoView page stop: success=" + success)
-            }
-        }
-        session.permissionDelegate = object : GeckoSession.PermissionDelegate {
-            override fun onContentPermissionRequest(
-                session: GeckoSession,
-                permission: GeckoSession.PermissionDelegate.ContentPermission,
-            ): GeckoResult<Int> {
-                val allowed = permission.permission ==
-                    GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE ||
-                    permission.permission ==
-                    GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE
-                return GeckoResult.fromValue(
-                    if (allowed) {
-                        GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
-                    } else {
-                        GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY
-                    },
-                )
-            }
-        }
-
-        val appRuntime = (application as WebTvLiveApplication).geckoRuntime
-
-        session.open(appRuntime)
-        session.setActive(true)
-        session.setFocused(true)
-        createdView.setSession(session)
-        geckoView = createdView
-        geckoSession = session
-        binding.webContainer.addView(
-            createdView,
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT,
-        )
-        installWebExtensionAndLoad(appRuntime, session)
-    }
-
-    private fun installWebExtensionAndLoad(runtime: GeckoRuntime, session: GeckoSession) {
-        runtime.webExtensionController
-            .ensureBuiltIn(EXTENSION_LOCATION, EXTENSION_ID)
-            .accept(
-                { extension ->
-                    if (isFinishing || isDestroyed) return@accept
-                    if (extension == null) {
-                        Log.e(TAG, "GeckoView extension install returned null")
-                        loadCurrentChannel()
-                        return@accept
+                override fun onPageStarted(url: String) {
+                    pageLoadInProgress = true
+                    Log.i(TAG, "Browser page start: $url")
+                    if (url.startsWith(TvCatalog.YANGSHIPIN_HOME_URL)) {
+                        Log.i(TAG, "StartupTiming: page_started elapsed=${startupElapsed()}ms")
                     }
-                    session.webExtensionController.setMessageDelegate(
-                        extension,
-                        object : WebExtension.MessageDelegate {
-                            override fun onConnect(port: WebExtension.Port) {
-                                port.setDelegate(
-                                    object : WebExtension.PortDelegate {
-                                        override fun onPortMessage(
-                                            message: Any,
-                                            port: WebExtension.Port,
-                                        ) {
-                                            handleExtensionMessage(message, port)
-                                        }
+                }
 
-                                        override fun onDisconnect(port: WebExtension.Port) {
-                                            runOnUiThread {
-                                                if (extensionPort === port) extensionPort = null
-                                            }
-                                        }
-                                    },
-                                )
-                                runOnUiThread {
-                                    extensionPort = port
-                                    Log.i(TAG, "WebExtension native port connected")
-                                }
-                            }
+                override fun onPageStopped(success: Boolean) {
+                    pageLoadInProgress = false
+                    Log.i(TAG, "Browser page stop: success=$success")
+                }
 
-                            override fun onMessage(
-                                nativeApp: String,
-                                message: Any,
-                                sender: WebExtension.MessageSender,
-                            ): GeckoResult<Any>? {
-                                handleExtensionMessage(message)
-                                return null
-                            }
-                        },
-                        NATIVE_APP_ID,
-                    )
-                    Log.i(
-                        TAG,
-                        "GeckoView ready; built-in extension installed; " +
-                            "elapsed=${startupElapsed()}ms",
-                    )
-                    loadCurrentChannel()
-                },
-                { error ->
-                    if (isFinishing || isDestroyed) return@accept
-                    Log.e(TAG, "Unable to install GeckoView extension", error)
-                    loadCurrentChannel()
-                },
-            )
+                override fun onPlaybackReady(requestId: Long) {
+                    handlePlaybackReady(requestId)
+                }
+
+                override fun onChannelSelected(channel: String) {
+                    Log.i(TAG, "Yangshipin channel selected: $channel")
+                }
+
+                override fun onChannelNotFound(channel: String) {
+                    Log.e(TAG, "Yangshipin channel not found: $channel")
+                }
+
+                override fun onDiagnostic(message: String) {
+                    Log.i(TAG, message)
+                }
+
+                override fun onCrash() {
+                    Log.e(TAG, "Browser content process crashed")
+                }
+            },
+        )
     }
 
-    /** 统一处理一次性消息和持久 Port 消息。Port ready 后下发当前频道。 */
-    private fun handleExtensionMessage(message: Any, port: WebExtension.Port? = null) {
-        val payload = message as? JSONObject ?: return
-        when (payload.optString("type")) {
-            "ready" -> runOnUiThread {
-                val activePort = port ?: extensionPort ?: return@runOnUiThread
-                extensionPort = activePort
-                Log.i(TAG, "StartupTiming: extension_ready elapsed=${startupElapsed()}ms")
-                sendVideoEnhancement(activePort)
-                val directAttempt = playbackAttempt?.takeIf {
-                    it.channelIndex == currentChannelIndex &&
-                        it.stage != PlaybackStage.IN_PAGE
-                }
-                sendChannelSwitch(
-                    activePort,
-                    currentChannelIndex,
-                    reuseAttempt = directAttempt,
-                )
-            }
-            "playing" -> runOnUiThread {
-                val requestId = payload.optLong("requestId", -1L)
-                val attempt = playbackAttempt
-                if (requestId == waitingPlaybackRequestId && attempt?.requestId == requestId) {
-                    uiHandler.removeCallbacks(playbackTimeoutRunnable)
-                    waitingPlaybackRequestId = null
-                    playbackAttempt = null
-                    currentChannelIndex = attempt.channelIndex
-                    lastSuccessfulChannelIndex = attempt.channelIndex
-                    saveSuccessfulChannelIndex(attempt.channelIndex)
-                    binding.loadingText.visibility = View.GONE
-                    Log.i(
-                        TAG,
-                        "Playback ready; loading overlay hidden: request=$requestId, " +
-                            "channel=${TvCatalog.flatChannels[attempt.channelIndex].siteName}",
-                    )
-                    Log.i(
-                        TAG,
-                        "StartupTiming: playback_ready total=${startupElapsed()}ms, " +
-                            "attempt=${SystemClock.elapsedRealtime() - attempt.startedAt}ms, " +
-                            "stage=${attempt.stage}",
-                    )
-                } else {
-                    Log.i(
-                        TAG,
-                        "Ignored stale playing message: request=$requestId, " +
-                            "waiting=$waitingPlaybackRequestId",
-                    )
-                }
-            }
-            "channelSelected" -> Log.i(
+    private fun handlePlaybackReady(requestId: Long) {
+        val attempt = playbackAttempt
+        if (requestId == waitingPlaybackRequestId && attempt?.requestId == requestId) {
+            uiHandler.removeCallbacks(playbackTimeoutRunnable)
+            waitingPlaybackRequestId = null
+            playbackAttempt = null
+            currentChannelIndex = attempt.channelIndex
+            lastSuccessfulChannelIndex = attempt.channelIndex
+            saveSuccessfulChannelIndex(attempt.channelIndex)
+            binding.loadingText.visibility = View.GONE
+            Log.i(
                 TAG,
-                "Yangshipin channel selected: ${payload.optString("channel")}",
+                "Playback ready; loading overlay hidden: request=$requestId, " +
+                    "channel=${TvCatalog.flatChannels[attempt.channelIndex].siteName}",
             )
-            "channelNotFound" -> Log.e(
+            Log.i(
                 TAG,
-                "Yangshipin channel not found: ${payload.optString("channel")}",
+                "StartupTiming: playback_ready total=${startupElapsed()}ms, " +
+                    "attempt=${SystemClock.elapsedRealtime() - attempt.startedAt}ms, " +
+                    "stage=${attempt.stage}",
             )
-            "diagnostic" -> Log.i(TAG, payload.optString("message"))
+        } else {
+            Log.i(
+                TAG,
+                "Ignored stale playing message: request=$requestId, " +
+                    "waiting=$waitingPlaybackRequestId",
+            )
         }
     }
     // endregion
@@ -371,11 +239,11 @@ class MainActivity : AppCompatActivity() {
     // region 遥控器按键：菜单开合 / 上下换台 / 返回退出
     //
     // 关键：必须在 dispatchKeyEvent 里拦截，而不是 onKeyDown。
-    // onKeyDown 只是「焦点 View（GeckoView）没消费按键时」才回调的兜底；方向键会先进网页：
+    // onKeyDown 只是「焦点浏览器 View 没消费按键时」才回调的兜底；方向键会先进网页：
     //  - 左/右让网页滚动或移动焦点 —— 表现为「视频画面移动」；
     //  - 焦点一旦进了网页，后续上/下也可能被网页吃掉 —— 表现为「换台失灵」。
     // 在 dispatchKeyEvent 提前吞掉这些键，浏览器永远拿不到，两个问题一并解决。
-    // 菜单展开时，同一批方向键改为在菜单内导航（此时 GeckoView 仍在后面正常播放）。
+    // 菜单展开时，同一批方向键改为在菜单内导航（此时浏览器 View 仍在后面正常播放）。
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val keyCode = event.keyCode
         if (isRemoteControlKey(keyCode)) {
@@ -436,83 +304,46 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 切换当前频道。央视频首页只加载一次；WebExtension Port 可用后，后续切台仅点击站内频道项，
-     * 由央视频局部替换播放器，不再 stop/loadUri 重载整页。
+     * 切换当前频道。页面适配脚本可用时优先在站内点击频道项；不可用时整页直达 pid 页面。
      */
     private fun loadCurrentChannel() {
         // 首次加载可能绕过防抖直接进来，这里清一次待执行的防抖任务，避免重复加载
         uiHandler.removeCallbacks(loadChannelRunnable)
         cancelPlaybackAttempt()
-        showChannelName(TvCatalog.flatChannels[currentChannelIndex].name)
+        val channel = TvCatalog.flatChannels[currentChannelIndex]
+        showChannelName(channel.name)
 
-        val port = extensionPort
-        if (port != null) {
-            sendChannelSwitch(port, currentChannelIndex)
+        if (!browserEngine.canSwitchInPage()) {
+            // 首次启动直接进入目标频道页面，避免先初始化 CCTV-1、再重建目标播放器。
+            startDirectLoad(currentChannelIndex, PlaybackStage.DIRECT)
             return
         }
 
-        // 首次启动直接进入目标频道页面，避免先初始化 CCTV-1、再重建目标播放器。
-        startDirectLoad(currentChannelIndex, PlaybackStage.DIRECT)
-    }
-
-    private fun sendChannelSwitch(
-        port: WebExtension.Port,
-        channelIndex: Int,
-        reuseAttempt: PlaybackAttempt? = null,
-    ) {
-        val channel = TvCatalog.flatChannels[channelIndex]
-        try {
-            // 央视频页内换台时旧 video 会继续播放一小段时间。先盖住旧画面，直到扩展确认
-            // 网站已换成新的 video 节点且新频道真正开始播放，再由 playing 消息移除遮罩。
-            val requestId = ++channelSwitchRequestId
-            val attempt = reuseAttempt ?: startPlaybackAttempt(
-                channelIndex = channelIndex,
-                stage = PlaybackStage.IN_PAGE,
-                timeoutMs = IN_PAGE_PLAYBACK_TIMEOUT_MS,
-            )
-            attempt.requestId = requestId
-            waitingPlaybackRequestId = requestId
-            binding.loadingText.visibility = View.VISIBLE
-            port.postMessage(
-                JSONObject()
-                    .put("type", "switchChannel")
-                    .put("channel", channel.siteName)
-                    .put("pid", channel.pid)
-                    .put("requestId", requestId),
-            )
+        val requestId = ++channelSwitchRequestId
+        val attempt = startPlaybackAttempt(
+            channelIndex = currentChannelIndex,
+            stage = PlaybackStage.IN_PAGE,
+            timeoutMs = IN_PAGE_PLAYBACK_TIMEOUT_MS,
+        )
+        attempt.requestId = requestId
+        waitingPlaybackRequestId = requestId
+        binding.loadingText.visibility = View.VISIBLE
+        if (browserEngine.switchChannel(channel, requestId)) {
             Log.i(
                 TAG,
                 "Requested in-page channel switch: ${channel.siteName}, request=$requestId, " +
                     "stage=${attempt.stage}",
             )
-        } catch (error: Exception) {
-            Log.e(TAG, "Unable to send channel switch through WebExtension port", error)
-            if (extensionPort === port) extensionPort = null
-            startDirectLoad(channelIndex, PlaybackStage.DIRECT)
+            return
         }
-    }
 
-    /** 把当前画质增强档位同步给页面扩展；扩展会对现有及后续重建的 video 持续应用。 */
-    private fun sendVideoEnhancement(port: WebExtension.Port? = extensionPort) {
-        if (port == null) return
-        try {
-            port.postMessage(
-                JSONObject()
-                    .put("type", "setVideoEnhancement")
-                    .put("level", videoEnhancement.wireValue),
-            )
-            Log.i(TAG, "Video enhancement requested: ${videoEnhancement.wireValue}")
-        } catch (error: Exception) {
-            Log.e(TAG, "Unable to send video enhancement through WebExtension port", error)
-        }
+        startDirectLoad(currentChannelIndex, PlaybackStage.DIRECT)
     }
 
     private fun startDirectLoad(channelIndex: Int, stage: PlaybackStage) {
         val channel = TvCatalog.flatChannels[channelIndex]
         cancelPlaybackAttempt()
         currentChannelIndex = channelIndex
-        extensionPort?.disconnect()
-        extensionPort = null
         binding.loadingText.visibility = View.VISIBLE
         val attempt = startPlaybackAttempt(
             channelIndex = channelIndex,
@@ -524,8 +355,10 @@ class MainActivity : AppCompatActivity() {
                 PlaybackStage.FALLBACK -> FALLBACK_PLAYBACK_TIMEOUT_MS
             },
         )
-        geckoSession?.stop()
-        geckoSession?.loadUri(TvCatalog.pageUrl(channel))
+        val requestId = ++channelSwitchRequestId
+        attempt.requestId = requestId
+        waitingPlaybackRequestId = requestId
+        browserEngine.loadChannel(channel, requestId)
         Log.i(
             TAG,
             "Direct channel page load: ${channel.siteName}, pid=${channel.pid}, " +
@@ -925,7 +758,7 @@ class MainActivity : AppCompatActivity() {
         prefs.edit().putString(KEY_VIDEO_ENHANCEMENT, selected.wireValue).apply()
         settingsValueAdapter.submit(videoEnhancementLabels(), keepIndex = position)
         settingsValueAdapter.setColumnActive(settingsActiveColumn == COLUMN_SETTING_VALUE)
-        sendVideoEnhancement()
+        browserEngine.applyVideoEnhancement(selected)
     }
 
     private fun videoEnhancementLabels(): List<String> = VideoEnhancement.entries.map { level ->
@@ -940,14 +773,12 @@ class MainActivity : AppCompatActivity() {
     // region 生命周期
     override fun onPause() {
         super.onPause()
-        geckoSession?.setFocused(false)
-        geckoSession?.setActive(false)
+        if (::browserEngine.isInitialized) browserEngine.onPause()
     }
 
     override fun onResume() {
         super.onResume()
-        geckoSession?.setActive(true)
-        geckoSession?.setFocused(true)
+        if (::browserEngine.isInitialized) browserEngine.onResume()
         enableImmersiveFullscreen()
     }
 
@@ -955,13 +786,7 @@ class MainActivity : AppCompatActivity() {
         uiHandler.removeCallbacks(hideChannelNameRunnable)
         uiHandler.removeCallbacks(loadChannelRunnable)
         cancelPlaybackAttempt()
-        extensionPort?.disconnect()
-        extensionPort = null
-        geckoView?.releaseSession()
-        geckoSession?.close()
-        binding.webContainer.removeAllViews()
-        geckoView = null
-        geckoSession = null
+        if (::browserEngine.isInitialized) browserEngine.destroy()
         super.onDestroy()
     }
     // endregion

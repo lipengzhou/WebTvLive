@@ -26,6 +26,17 @@ android {
             }
         }
     }
+    flavorDimensions += "engine"
+    productFlavors {
+        create("gecko") {
+            dimension = "engine"
+            versionNameSuffix = "-gecko"
+        }
+        create("webview") {
+            dimension = "engine"
+            versionNameSuffix = "-webview"
+        }
+    }
     splits {
         abi {
             isEnable = true
@@ -53,7 +64,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.material)
     implementation(libs.androidx.recyclerview)
-    implementation(libs.geckoview)
+    "geckoImplementation"(libs.geckoview)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)

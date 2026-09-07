@@ -1,4 +1,7 @@
 (function () {
+  if (window.__webTvLivePlayerAdapterInjected) return;
+  window.__webTvLivePlayerAdapterInjected = true;
+
   var MARK = 'data-webtvlive-fs';
   var KEEP = 'data-webtvlive-keep';
   var CLEARED = 'data-webtvlive-cleared';
@@ -467,7 +470,7 @@
     var activeQuality = document.querySelector('.bei-list .item.active');
     send(
       'diagnostic',
-      'Gecko video playing: ' + video.videoWidth + 'x' + video.videoHeight +
+      'Video playing: ' + video.videoWidth + 'x' + video.videoHeight +
         ', rect=' + Math.round(rect.width) + 'x' + Math.round(rect.height) +
         ', viewport=' + window.innerWidth + 'x' + window.innerHeight +
         ', volume=' + Math.round(video.volume * 100) + '%, muted=' + video.muted +
@@ -655,7 +658,7 @@
     scheduleReconcile(false, false, true, false);
   });
 
-  send('diagnostic', 'Gecko event-driven adapter injected: ' + location.href);
+  send('diagnostic', 'Event-driven player adapter injected: ' + location.href);
   connectNativePort();
   setTimeout(reportResourceFilterStats, 5000);
   domObserver.observe(document.documentElement, {
