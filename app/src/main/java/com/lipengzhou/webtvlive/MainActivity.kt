@@ -1,13 +1,17 @@
 package com.lipengzhou.webtvlive
 
+import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
 import android.util.Log
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.SoundEffectConstants
 import android.view.View
+import android.view.ViewConfiguration
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
@@ -15,6 +19,8 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.lipengzhou.webtvlive.databinding.ActivityMainBinding
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * WebTvLive：
@@ -68,10 +74,20 @@ class MainActivity : AppCompatActivity() {
     private var videoEnhancement = VideoEnhancement.ORIGINAL
     // endregion
 
+    // region 触屏亮度/音量状态
+    private val audioManager by lazy { getSystemService(AudioManager::class.java) }
+    private val touchSlop by lazy { ViewConfiguration.get(this).scaledTouchSlop }
+    private var touchGesture: TouchGesture? = null
+    private var playbackBrightness: Float? = null
+    // endregion
+
     // 主线程 Handler：控制频道名浮层自动隐藏、以及换台防抖
     private val uiHandler = Handler(Looper.getMainLooper())
     private val hideChannelNameRunnable = Runnable {
         binding.channelName.visibility = View.GONE
+    }
+    private val hideTouchAdjustmentRunnable = Runnable {
+        binding.touchAdjustmentOverlay.visibility = View.GONE
     }
     // 换台防抖：狂按遥控器时不每次都加载，停手后只对最终频道加载一次
     private val loadChannelRunnable = Runnable { loadCurrentChannel() }
@@ -92,9 +108,26 @@ class MainActivity : AppCompatActivity() {
         var requestId: Long? = null,
     )
 
+    private enum class TouchAdjustment {
+        BRIGHTNESS,
+        VOLUME,
+    }
+
+    private data class TouchGesture(
+        val type: TouchAdjustment,
+        val startY: Float,
+        val startValue: Float,
+        var activated: Boolean = false,
+        var lastPercent: Int = -1,
+    )
+
     companion object {
         private const val BACK_EXIT_INTERVAL = 2000L
         private const val CHANNEL_NAME_SHOW_MS = 3000L
+        private const val TOUCH_ADJUSTMENT_SHOW_MS = 900L
+        private const val TOUCH_GESTURE_GAIN = 1.15f
+        private const val MIN_PLAYBACK_BRIGHTNESS = 0.05f
+        private const val DEFAULT_SYSTEM_BRIGHTNESS = 0.5f
         // 换台防抖：停止按键 600ms 后才真正加载，避免连续切台把每个中间台都请求一遍被 CCTV 限流
         private const val CHANNEL_SWITCH_DEBOUNCE_MS = 600L
         // 已加载页面内换台通常很快；超时后改用该频道的官网 pid 页面重新建链。
@@ -112,6 +145,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_LAST_CHANNEL = "last_channel_index"
         private const val KEY_LAST_SUCCESSFUL_CHANNEL = "last_successful_channel_index"
         private const val KEY_VIDEO_ENHANCEMENT = "video_enhancement"
+        private const val KEY_PLAYBACK_BRIGHTNESS = "playback_brightness"
         // 侧边菜单两列
         private const val COLUMN_CATEGORY = 0
         private const val COLUMN_CHANNEL = 1
@@ -132,6 +166,8 @@ class MainActivity : AppCompatActivity() {
         lastSuccessfulChannelIndex = restoreLastSuccessfulChannelIndex()
         currentChannelIndex = lastSuccessfulChannelIndex
         videoEnhancement = restoreVideoEnhancement()
+        playbackBrightness = restorePlaybackBrightness()
+        playbackBrightness?.let { applyPlaybackBrightness(it) }
         Log.i(TAG, "StartupTiming: activity_ready elapsed=${startupElapsed()}ms")
         createAndAttachBrowserEngine()
     }
@@ -233,6 +269,174 @@ class MainActivity : AppCompatActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) enableImmersiveFullscreen()
+    }
+    // endregion
+
+    // region 触屏亮度/音量
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (!::binding.isInitialized || menuVisible || settingsVisible) {
+            return super.dispatchTouchEvent(event)
+        }
+        return if (handlePlaybackTouch(event)) true else super.dispatchTouchEvent(event)
+    }
+
+    private fun handlePlaybackTouch(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                beginTouchAdjustment(event)
+                return true
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                if (event.pointerCount != 1) {
+                    cancelTouchAdjustment()
+                    return true
+                }
+                updateTouchAdjustment(event)
+                return true
+            }
+
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                cancelTouchAdjustment()
+                return true
+            }
+
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                finishTouchAdjustment()
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun beginTouchAdjustment(event: MotionEvent) {
+        val rootWidth = binding.rootLayout.width
+        if (rootWidth <= 0) return
+        val type = if (event.x < rootWidth / 2f) {
+            TouchAdjustment.BRIGHTNESS
+        } else {
+            TouchAdjustment.VOLUME
+        }
+        val startValue = when (type) {
+            TouchAdjustment.BRIGHTNESS -> currentPlaybackBrightness()
+            TouchAdjustment.VOLUME -> currentMusicVolumeFraction()
+        }
+        touchGesture = TouchGesture(
+            type = type,
+            startY = event.y,
+            startValue = startValue,
+        )
+    }
+
+    private fun updateTouchAdjustment(event: MotionEvent) {
+        val gesture = touchGesture ?: return
+        val verticalDelta = gesture.startY - event.y
+        if (!gesture.activated && abs(verticalDelta) < touchSlop) return
+        gesture.activated = true
+
+        val rootHeight = binding.rootLayout.height.coerceAtLeast(1)
+        val nextValue = (
+            gesture.startValue +
+                verticalDelta / rootHeight * TOUCH_GESTURE_GAIN
+            ).coerceIn(0f, 1f)
+
+        when (gesture.type) {
+            TouchAdjustment.BRIGHTNESS -> updatePlaybackBrightness(nextValue, gesture)
+            TouchAdjustment.VOLUME -> updateMusicVolume(nextValue, gesture)
+        }
+    }
+
+    private fun updatePlaybackBrightness(value: Float, gesture: TouchGesture) {
+        val brightness = value.coerceIn(MIN_PLAYBACK_BRIGHTNESS, 1f)
+        applyPlaybackBrightness(brightness)
+        val percent = (brightness * 100).roundToInt().coerceIn(0, 100)
+        showTouchAdjustment(TouchAdjustment.BRIGHTNESS, percent, gesture)
+    }
+
+    private fun applyPlaybackBrightness(value: Float) {
+        val brightness = value.coerceIn(MIN_PLAYBACK_BRIGHTNESS, 1f)
+        playbackBrightness = brightness
+        val attributes = window.attributes
+        attributes.screenBrightness = brightness
+        window.attributes = attributes
+    }
+
+    private fun updateMusicVolume(value: Float, gesture: TouchGesture) {
+        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            .coerceAtLeast(1)
+        val volume = (value * maxVolume).roundToInt().coerceIn(0, maxVolume)
+        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, volume, 0)
+        val percent = (volume * 100f / maxVolume).roundToInt().coerceIn(0, 100)
+        showTouchAdjustment(TouchAdjustment.VOLUME, percent, gesture)
+    }
+
+    private fun showTouchAdjustment(
+        type: TouchAdjustment,
+        percent: Int,
+        gesture: TouchGesture,
+    ) {
+        if (gesture.lastPercent == percent) return
+        gesture.lastPercent = percent
+        binding.touchAdjustmentOverlay.text = when (type) {
+            TouchAdjustment.BRIGHTNESS -> getString(R.string.touch_adjustment_brightness, percent)
+            TouchAdjustment.VOLUME -> getString(R.string.touch_adjustment_volume, percent)
+        }
+        binding.touchAdjustmentOverlay.visibility = View.VISIBLE
+        uiHandler.removeCallbacks(hideTouchAdjustmentRunnable)
+    }
+
+    private fun finishTouchAdjustment() {
+        val gesture = touchGesture
+        if (gesture?.activated == true && gesture.type == TouchAdjustment.BRIGHTNESS) {
+            playbackBrightness?.let { savePlaybackBrightness(it) }
+        }
+        touchGesture = null
+        if (gesture?.activated == true) {
+            uiHandler.removeCallbacks(hideTouchAdjustmentRunnable)
+            uiHandler.postDelayed(hideTouchAdjustmentRunnable, TOUCH_ADJUSTMENT_SHOW_MS)
+        } else {
+            binding.touchAdjustmentOverlay.visibility = View.GONE
+        }
+    }
+
+    private fun cancelTouchAdjustment() {
+        touchGesture = null
+        uiHandler.removeCallbacks(hideTouchAdjustmentRunnable)
+        binding.touchAdjustmentOverlay.visibility = View.GONE
+    }
+
+    private fun currentPlaybackBrightness(): Float {
+        val windowBrightness = window.attributes.screenBrightness
+        if (windowBrightness in 0f..1f) {
+            return windowBrightness.coerceIn(MIN_PLAYBACK_BRIGHTNESS, 1f)
+        }
+        val systemBrightness = runCatching {
+            Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS)
+        }.getOrDefault((DEFAULT_SYSTEM_BRIGHTNESS * 255).roundToInt())
+        return (systemBrightness / 255f).coerceIn(MIN_PLAYBACK_BRIGHTNESS, 1f)
+    }
+
+    private fun currentMusicVolumeFraction(): Float {
+        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            .coerceAtLeast(1)
+        return (audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) / maxVolume.toFloat())
+            .coerceIn(0f, 1f)
+    }
+
+    private fun restorePlaybackBrightness(): Float? {
+        if (!prefs.contains(KEY_PLAYBACK_BRIGHTNESS)) return null
+        val saved = prefs.getFloat(KEY_PLAYBACK_BRIGHTNESS, DEFAULT_SYSTEM_BRIGHTNESS)
+        return if (saved in 0f..1f) {
+            saved.coerceIn(MIN_PLAYBACK_BRIGHTNESS, 1f)
+        } else {
+            null
+        }
+    }
+
+    private fun savePlaybackBrightness(value: Float) {
+        prefs.edit()
+            .putFloat(KEY_PLAYBACK_BRIGHTNESS, value.coerceIn(MIN_PLAYBACK_BRIGHTNESS, 1f))
+            .apply()
     }
     // endregion
 
@@ -784,6 +988,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         uiHandler.removeCallbacks(hideChannelNameRunnable)
+        uiHandler.removeCallbacks(hideTouchAdjustmentRunnable)
         uiHandler.removeCallbacks(loadChannelRunnable)
         cancelPlaybackAttempt()
         if (::browserEngine.isInitialized) browserEngine.destroy()

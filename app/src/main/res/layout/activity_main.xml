@@ -47,6 +47,22 @@
         android:textStyle="bold"
         android:visibility="gone" />
 
+    <!-- 触屏滑动调节反馈：左半屏调亮度，右半屏调音量。 -->
+    <TextView
+        android:id="@+id/touchAdjustmentOverlay"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:background="#B3000000"
+        android:gravity="center"
+        android:minWidth="160dp"
+        android:paddingHorizontal="24dp"
+        android:paddingVertical="14dp"
+        android:textColor="@android:color/white"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:visibility="gone" />
+
     <!-- 侧边频道菜单（默认隐藏）：
          贴左显示，只占屏幕左侧一部分，右侧留空让视频继续可见、继续播放。
          左区 = 分类列表，右区 = 该分类下的频道列表，都是垂直滚动。 -->
