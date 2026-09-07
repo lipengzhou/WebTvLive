@@ -75,6 +75,20 @@ adb -s 127.0.0.1:5555 logcat -c                              # 先清空
 adb -s 127.0.0.1:5555 logcat -d | grep -i "WebTvLive\|cctv\|Gecko\|MediaCodec"
 ```
 
+## 发版规则
+
+- 版本号使用 `0.0.x` 小版本递增策略；如无特殊说明，每次发版只递增最后一位 patch 号。例如 `0.0.1` 的下一版是 `0.0.2`。
+- Git tag 使用 `v<versionName>` 格式，例如 `v0.0.1`。
+- 发版前至少执行：
+
+```bash
+export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+./gradlew :app:testGeckoDebugUnitTest :app:testWebviewDebugUnitTest :app:assembleDebug -q
+```
+
+- GitHub Release 需要附带 release notes，并上传本次构建出的 APK。默认上传 `gecko` 和 `webview` 两个 flavor 的 arm64-v8a / armeabi-v7a debug APK。
+- 发版提交、tag 和 release 不应包含无关本地改动，例如 `.idea/misc.xml`。
+
 ### 交互速查（当前实现）
 
 - **上**（`DPAD_UP` / `CHANNEL_UP`）：标准态=下一个频道（到末尾循环回第一个）；菜单态=当前列上移一项。
