@@ -13,4 +13,7 @@
     <string name="video_enhancement_strong">强力增强</string>
     <string name="touch_adjustment_brightness">亮度 %1$d%%</string>
     <string name="touch_adjustment_volume">音量 %1$d%%</string>
+    <string name="touch_action_channels">频道列表</string>
+    <string name="touch_action_settings">系统设置</string>
+    <string name="touch_action_exit">退出</string>
 </resources>

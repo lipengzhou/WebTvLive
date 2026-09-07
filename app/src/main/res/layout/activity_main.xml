@@ -63,6 +63,52 @@
         android:textStyle="bold"
         android:visibility="gone" />
 
+    <LinearLayout
+        android:id="@+id/touchControls"
+        android:layout_width="match_parent"
+        android:layout_height="96dp"
+        android:layout_gravity="bottom"
+        android:background="#99000000"
+        android:clickable="true"
+        android:focusable="false"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:paddingHorizontal="32dp"
+        android:visibility="gone">
+
+        <Button
+            android:id="@+id/touchChannelButton"
+            android:layout_width="0dp"
+            android:layout_height="56dp"
+            android:layout_marginEnd="8dp"
+            android:layout_weight="1"
+            android:text="@string/touch_action_channels"
+            android:textAllCaps="false"
+            android:textSize="18sp" />
+
+        <Button
+            android:id="@+id/touchSettingsButton"
+            android:layout_width="0dp"
+            android:layout_height="56dp"
+            android:layout_marginStart="8dp"
+            android:layout_marginEnd="8dp"
+            android:layout_weight="1"
+            android:text="@string/touch_action_settings"
+            android:textAllCaps="false"
+            android:textSize="18sp" />
+
+        <Button
+            android:id="@+id/touchExitButton"
+            android:layout_width="0dp"
+            android:layout_height="56dp"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:text="@string/touch_action_exit"
+            android:textAllCaps="false"
+            android:textSize="18sp" />
+
+    </LinearLayout>
+
     <!-- 侧边频道菜单（默认隐藏）：
          贴左显示，只占屏幕左侧一部分，右侧留空让视频继续可见、继续播放。
          左区 = 分类列表，右区 = 该分类下的频道列表，都是垂直滚动。 -->
