@@ -1,6 +1,6 @@
 # AGENTS.md — WebTvLive 协作与调试说明
 
-本文件面向在本仓库工作的 AI/协作者，记录经过真机/模拟器验证的构建与调试流程，避免重复踩坑。产品与里程碑规划见 `docs/开发计划.md`。
+本文件面向在本仓库工作的 AI/协作者，记录经过真机/模拟器验证的构建与调试流程，避免重复踩坑。
 
 ## 项目速览
 
@@ -112,7 +112,7 @@ adb -s 127.0.0.1:5555 logcat -d | grep -i "WebTvLive\|cctv\|Gecko\|MediaCodec"
 - GeckoView 153 使用 Java 17 API，Gradle 的 Java/Kotlin JVM target 必须保持 17。
 - 构建启用了 ABI 拆包：32 位电视安装 `app-armeabi-v7a-debug.apk`，ARM64 模拟器安装 `app-arm64-v8a-debug.apk`。
 - 腾讯 X5 在 `MiTV-MFTP0` 上初始化返回下载状态 `-124`（服务端未下发内核），会退回系统 WebView 66，因此没有作为最终方案保留。
-- 全屏方案关键结论详见 `docs/开发计划.md` 的 M0 章节（清祖先 `transform`、每秒写 `!important` 内联样式、隐藏非播放器顶层节点、不开 `useWideViewPort/loadWithOverviewMode`）。
+- 全屏方案关键结论：清祖先 `transform`、每秒写 `!important` 内联样式、隐藏非播放器顶层节点、不开 `useWideViewPort/loadWithOverviewMode`。
 
 ## 合规红线
 

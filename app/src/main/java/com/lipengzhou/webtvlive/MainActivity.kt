@@ -27,8 +27,6 @@ import kotlin.math.roundToInt
  *  - 启动后自动加载频道列表中的默认频道；
  *  - 页面加载完注入全屏脚本，把网页 <video> 铺满整个屏幕；
  *  - 遥控器方向键「上/下」循环换台，「确定」键呼出侧边频道菜单，返回键按两次退出应用。
- *
- * 后续（多源、遥控器完整映射）按 docs/开发计划.md 推进。
  */
 class MainActivity : AppCompatActivity() {
 
