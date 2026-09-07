@@ -26,12 +26,19 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ./gradlew :app:compileGeckoDebugKotlin -q
 ./gradlew :app:compileWebviewDebugKotlin -q
 
-# 打 debug APK（按内核 flavor + ABI 分包）
+# 打 debug APK（本地开发/模拟器调试用，按内核 flavor + ABI 分包）
 ./gradlew :app:assembleDebug -q
 # GeckoView 32 位：app/build/outputs/apk/gecko/debug/app-gecko-armeabi-v7a-debug.apk
 # GeckoView 64 位：app/build/outputs/apk/gecko/debug/app-gecko-arm64-v8a-debug.apk
 # 原生 WebView 32 位：app/build/outputs/apk/webview/debug/app-webview-armeabi-v7a-debug.apk
 # 原生 WebView 64 位：app/build/outputs/apk/webview/debug/app-webview-arm64-v8a-debug.apk
+
+# 打 release APK（GitHub Release/正式分发用，需要先配置签名）
+./gradlew :app:assembleRelease -q
+# GeckoView 32 位：app/build/outputs/apk/gecko/release/app-gecko-armeabi-v7a-release.apk
+# GeckoView 64 位：app/build/outputs/apk/gecko/release/app-gecko-arm64-v8a-release.apk
+# 原生 WebView 32 位：app/build/outputs/apk/webview/release/app-webview-armeabi-v7a-release.apk
+# 原生 WebView 64 位：app/build/outputs/apk/webview/release/app-webview-arm64-v8a-release.apk
 ```
 
 ## 在模拟器/真机上调试（无遥控器时的等效操作）
@@ -44,7 +51,7 @@ adb devices
 adb -s 127.0.0.1:5555 shell getprop ro.product.manufacturer   # -> Xiaomi
 adb -s 127.0.0.1:5555 shell getprop ro.build.version.sdk       # -> 32
 
-# 1) 安装新版（覆盖安装保留数据）
+# 1) 安装本地调试包（覆盖安装保留数据）
 adb -s 127.0.0.1:5555 install -r app/build/outputs/apk/webview/debug/app-webview-arm64-v8a-debug.apk
 
 # 2) 启动 app
@@ -78,15 +85,22 @@ adb -s 127.0.0.1:5555 logcat -d | grep -i "WebTvLive\|cctv\|Gecko\|MediaCodec"
 ## 发版规则
 
 - 版本号使用 `0.0.x` 小版本递增策略；如无特殊说明，每次发版只递增最后一位 patch 号。例如 `0.0.1` 的下一版是 `0.0.2`。
+- `versionCode` 每次正式发版递增 1。
 - Git tag 使用 `v<versionName>` 格式，例如 `v0.0.1`。
+- 本地开发、模拟器调试用 `debug` APK；GitHub Release/正式分发只上传 `release` APK。
+- release 签名信息从环境变量、Gradle property 或已被 Git 忽略的 `local.properties` 读取：
+  - `WEBTVLIVE_RELEASE_STORE_FILE`
+  - `WEBTVLIVE_RELEASE_STORE_PASSWORD`
+  - `WEBTVLIVE_RELEASE_KEY_ALIAS`
+  - `WEBTVLIVE_RELEASE_KEY_PASSWORD`
 - 发版前至少执行：
 
 ```bash
 export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
-./gradlew :app:testGeckoDebugUnitTest :app:testWebviewDebugUnitTest :app:assembleDebug -q
+./gradlew :app:testGeckoDebugUnitTest :app:testWebviewDebugUnitTest :app:assembleRelease -q
 ```
 
-- GitHub Release 需要附带 release notes，并上传本次构建出的 APK。默认上传 `gecko` 和 `webview` 两个 flavor 的 arm64-v8a / armeabi-v7a debug APK。
+- GitHub Release 需要附带 release notes，并上传本次构建出的 APK。默认上传 `gecko` 和 `webview` 两个 flavor 的 arm64-v8a / armeabi-v7a release APK。
 - 发版提交、tag 和 release 不应包含无关本地改动，例如 `.idea/misc.xml`。
 
 ### 交互速查（当前实现）

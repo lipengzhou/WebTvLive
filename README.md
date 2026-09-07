@@ -128,13 +128,13 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ./gradlew :app:compileWebviewDebugKotlin -q
 ```
 
-运行单元测试并打包：
+运行单元测试并打本地调试包：
 
 ```bash
 ./gradlew :app:testGeckoDebugUnitTest :app:testWebviewDebugUnitTest :app:assembleDebug -q
 ```
 
-Debug APK 输出：
+Debug APK 用于本地开发和模拟器调试，输出路径：
 
 ```text
 app/build/outputs/apk/gecko/debug/app-gecko-arm64-v8a-debug.apk
@@ -142,6 +142,30 @@ app/build/outputs/apk/gecko/debug/app-gecko-armeabi-v7a-debug.apk
 app/build/outputs/apk/webview/debug/app-webview-arm64-v8a-debug.apk
 app/build/outputs/apk/webview/debug/app-webview-armeabi-v7a-debug.apk
 ```
+
+Release APK 用于 GitHub Release 和正式分发。签名信息从环境变量、Gradle property 或本地 `local.properties` 读取：
+
+```properties
+WEBTVLIVE_RELEASE_STORE_FILE=/absolute/path/to/webtvlive-release.jks
+WEBTVLIVE_RELEASE_STORE_PASSWORD=...
+WEBTVLIVE_RELEASE_KEY_ALIAS=webtvlive
+WEBTVLIVE_RELEASE_KEY_PASSWORD=...
+```
+
+```bash
+./gradlew :app:testGeckoDebugUnitTest :app:testWebviewDebugUnitTest :app:assembleRelease -q
+```
+
+Release APK 输出路径：
+
+```text
+app/build/outputs/apk/gecko/release/app-gecko-arm64-v8a-release.apk
+app/build/outputs/apk/gecko/release/app-gecko-armeabi-v7a-release.apk
+app/build/outputs/apk/webview/release/app-webview-arm64-v8a-release.apk
+app/build/outputs/apk/webview/release/app-webview-armeabi-v7a-release.apk
+```
+
+发版版本号使用 `0.0.x` 小版本递增策略；如无特殊说明，每次只递增最后一位 patch 号。例如 `0.0.1` 的下一版是 `0.0.2`。
 
 ## 模拟器调试
 
@@ -153,7 +177,7 @@ adb -s emulator-5554 shell getprop ro.product.cpu.abi
 adb -s emulator-5554 shell getprop ro.build.version.sdk
 ```
 
-安装 GeckoView 版本并启动：
+安装 GeckoView debug 版本并启动：
 
 ```bash
 adb -s emulator-5554 install -r app/build/outputs/apk/gecko/debug/app-gecko-arm64-v8a-debug.apk
