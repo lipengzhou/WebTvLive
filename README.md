@@ -156,7 +156,9 @@ WEBTVLIVE_RELEASE_KEY_PASSWORD=...
 ./gradlew :app:testGeckoDebugUnitTest :app:testWebviewDebugUnitTest :app:assembleRelease -q
 ```
 
-`assembleRelease` 会同时开启 R8/资源优化。
+`assembleRelease` 会同时开启 R8/资源优化，并压缩 APK 内的 native `.so`。输出文件仍是
+可直接安装的标准 APK，不需要用户解压；安装时 Android 会把 native 库解压到应用目录，
+因此安装后的磁盘占用会高于 APK 文件大小。
 
 Release APK 输出路径：
 

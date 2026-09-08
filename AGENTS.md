@@ -41,6 +41,10 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 # 原生 WebView 64 位：app/build/outputs/apk/webview/release/app-webview-arm64-v8a-release.apk
 ```
 
+Release APK 启用 R8/资源优化，并通过 `useLegacyPackaging=true` 压缩 APK 内的 native
+`.so`；产物仍是可直接安装的标准 APK。Android 安装时会把 native 库解压到应用目录，
+所以安装后的磁盘占用会高于 APK 下载大小。Debug APK 保持默认的非压缩 native 库打包方式。
+
 ## 在模拟器/真机上调试（无遥控器时的等效操作）
 
 模拟器没有实体遥控器，用 `adb ... input keyevent` 发按键即可等效触发 `MainActivity.onKeyDown`。**同时连了多台设备时必须用 `-s <serial>` 指定目标。**
