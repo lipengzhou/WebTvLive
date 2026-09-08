@@ -35,8 +35,8 @@ android {
         applicationId = "com.lipengzhou.webtvlive"
         minSdk = 28
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.0.2"
+        versionCode = 3
+        versionName = "0.0.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -68,10 +68,12 @@ android {
         create("gecko") {
             dimension = "engine"
             versionNameSuffix = "-gecko"
+            buildConfigField("String", "UPDATE_ENGINE", "\"gecko\"")
         }
         create("webview") {
             dimension = "engine"
             versionNameSuffix = "-webview"
+            buildConfigField("String", "UPDATE_ENGINE", "\"webview\"")
         }
     }
     splits {
@@ -92,6 +94,7 @@ android {
         }
     }
     buildFeatures {
+        buildConfig = true
         viewBinding = true
     }
 }
@@ -109,6 +112,7 @@ dependencies {
     implementation(libs.androidx.recyclerview)
     "geckoImplementation"(libs.geckoview)
     testImplementation(libs.junit)
+    testImplementation(libs.json)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
 }

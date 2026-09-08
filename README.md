@@ -15,6 +15,7 @@ WebTvLive 是一款面向 Android TV 和触屏设备的全屏直播电视 App。
 - 系统设置面板：右侧设置面板，当前支持画质增强档位。
 - 播放恢复：换台后等待真实 `playing` 事件再隐藏加载遮罩，超时后自动重试或回退到稳定频道。
 - 画质增强：支持原始、轻度增强、标准增强、强力增强四档。
+- 自动更新：启动时静默检查 Gitee 更新，按当前内核和 CPU 架构下载对应正式包。
 - 触屏调节：左半屏滑动调应用内亮度，右半屏滑动调系统媒体音量。
 
 ## 触屏操作
@@ -74,6 +75,8 @@ WebTvLive 是一款面向 Android TV 和触屏设备的全屏直播电视 App。
 | 上 / 下 | 选择画质增强档位 |
 | 确定 | 应用当前档位 |
 | 返回 / 菜单键 | 关闭系统设置 |
+
+“检查更新”设置项支持手动检查。发现新版时会展示更新说明，可选择跳过该版本或后台下载；下载完成并校验文件、版本和签名后，会打开系统安装器。Android 首次侧载更新时需要用户允许本应用安装未知来源应用。
 
 ## 技术架构
 
@@ -143,7 +146,7 @@ app/build/outputs/apk/webview/debug/app-webview-arm64-v8a-debug.apk
 app/build/outputs/apk/webview/debug/app-webview-armeabi-v7a-debug.apk
 ```
 
-Release APK 用于 GitHub Release 和正式分发。签名信息从环境变量、Gradle property 或本地 `local.properties` 读取：
+Release APK 用于 Gitee Release 和正式分发。签名信息从环境变量、Gradle property 或本地 `local.properties` 读取：
 
 ```properties
 WEBTVLIVE_RELEASE_STORE_FILE=/absolute/path/to/webtvlive-release.jks
@@ -170,6 +173,22 @@ app/build/outputs/apk/webview/release/app-webview-armeabi-v7a-release.apk
 ```
 
 发版版本号使用 `0.0.x` 小版本递增策略；如无特殊说明，每次只递增最后一位 patch 号。例如 `0.0.1` 的下一版是 `0.0.2`。
+
+### Gitee Release 与更新清单
+
+App 从 `release/update.json` 检查版本，APK 下载地址固定使用 Gitee Release。发版时先准备一份纯文本更新说明，然后执行：
+
+```bash
+./scripts/prepare-gitee-release.sh --notes /path/to/release-notes.txt
+```
+
+脚本会运行双 flavor 单元测试和 release 构建，校验四个 APK 的版本、签名，计算文件大小与 SHA-256，并生成更新清单。随后在 Gitee 创建 `v<versionName>` Release，上传四个 APK；上传完成后执行：
+
+```bash
+./scripts/prepare-gitee-release.sh --verify-remote
+```
+
+确认四条下载链接可访问后，再提交并推送 `release/update.json`。必须最后发布清单，避免客户端在 APK 上传完成前发现新版本。
 
 ## 模拟器调试
 

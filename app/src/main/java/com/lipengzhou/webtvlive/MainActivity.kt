@@ -1,6 +1,15 @@
 package com.lipengzhou.webtvlive
 
+import android.annotation.SuppressLint
+import android.app.AlertDialog
+import android.app.DownloadManager
+import android.content.ActivityNotFoundException
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.media.AudioManager
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -14,6 +23,9 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -28,6 +40,9 @@ import kotlin.math.roundToInt
  *  - 页面加载完注入全屏脚本，把网页 <video> 铺满整个屏幕；
  *  - 遥控器方向键「上/下」循环换台，「确定」键呼出侧边频道菜单，返回键按两次退出应用。
  */
+// TV 遥控器的 BACK 必须与方向键一起在 dispatchKeyEvent 中同步处理；
+// predictive-back 回调无法替代实体遥控器按键的双击退出与菜单关闭语义。
+@SuppressLint("GestureBackNavigation")
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
@@ -38,6 +53,16 @@ class MainActivity : AppCompatActivity() {
     private var activityStartedAt = 0L
     private var nextPlaybackAttemptId = 0L
     private var playbackAttempt: PlaybackAttempt? = null
+    private lateinit var updateManager: AppUpdateManager
+    private var updateDialog: AlertDialog? = null
+    private var pendingUpdate: AppUpdateManager.CheckResult.Available? = null
+    private var pendingInstall: AppUpdateManager.PendingResult.Ready? = null
+    private var automaticUpdateCheckStarted = false
+    private var updateCheckInProgress = false
+    private var manualUpdateCheckQueued = false
+    private var activeUpdateCheckIsManual = false
+    private var pendingDownloadInspected = false
+    private var waitingForInstallPermission = false
 
     // 返回键两次退出
     private var lastBackPressedTime = 0L
@@ -104,6 +129,7 @@ class MainActivity : AppCompatActivity() {
     // 换台防抖：狂按遥控器时不每次都加载，停手后只对最终频道加载一次
     private val loadChannelRunnable = Runnable { loadCurrentChannel() }
     private val playbackTimeoutRunnable = Runnable { handlePlaybackTimeout() }
+    private val automaticUpdateCheckRunnable = Runnable { startAutomaticUpdateCheck() }
 
     private enum class PlaybackStage {
         IN_PAGE,
@@ -140,6 +166,7 @@ class MainActivity : AppCompatActivity() {
     private enum class SettingsItem(val titleRes: Int) {
         VIDEO_ENHANCEMENT(R.string.setting_video_enhancement),
         CHANNEL_SWITCH_REVERSE(R.string.setting_channel_switch_reverse),
+        CHECK_UPDATE(R.string.setting_check_update),
         ABOUT(R.string.setting_about),
     }
 
@@ -165,6 +192,7 @@ class MainActivity : AppCompatActivity() {
         // 页面资源已缓存后的同频道重试应明显更快，避免失败时继续长时间等待。
         private const val DIRECT_RETRY_TIMEOUT_MS = 25_000L
         private const val FALLBACK_PLAYBACK_TIMEOUT_MS = 30_000L
+        private const val AUTOMATIC_UPDATE_CHECK_DELAY_MS = 15_000L
         private const val DEFAULT_CHANNEL_INDEX = 13
         private const val STABLE_FALLBACK_SITE_NAME = "CCTV9"
         private const val SECONDARY_FALLBACK_SITE_NAME = "CCTV10"
@@ -181,6 +209,32 @@ class MainActivity : AppCompatActivity() {
         private const val COLUMN_SETTING_CATEGORY = 0
         private const val COLUMN_SETTING_VALUE = 1
         private const val TAG = "WebTvLive"
+        private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
+    }
+
+    private val installPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        waitingForInstallPermission = false
+        val ready = pendingInstall ?: return@registerForActivityResult
+        if (canInstallPackages()) {
+            launchPackageInstaller(ready)
+        } else {
+            pendingInstall = null
+            Toast.makeText(
+                this,
+                R.string.update_install_permission_denied,
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
+
+    private val downloadCompleteReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
+            val downloadId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
+            updateManager.handleDownloadComplete(downloadId, ::handlePendingDownload)
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -188,6 +242,13 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        updateManager = AppUpdateManager(this)
+        ContextCompat.registerReceiver(
+            this,
+            downloadCompleteReceiver,
+            IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+            ContextCompat.RECEIVER_EXPORTED,
+        )
 
         enableImmersiveFullscreen()
         keepScreenOn()
@@ -201,6 +262,7 @@ class MainActivity : AppCompatActivity() {
         playbackBrightness?.let { applyPlaybackBrightness(it) }
         Log.i(TAG, "StartupTiming: activity_ready elapsed=${startupElapsed()}ms")
         createAndAttachBrowserEngine()
+        uiHandler.postDelayed(automaticUpdateCheckRunnable, AUTOMATIC_UPDATE_CHECK_DELAY_MS)
     }
 
     // region 浏览器内核
@@ -262,6 +324,7 @@ class MainActivity : AppCompatActivity() {
             lastSuccessfulChannelIndex = attempt.channelIndex
             saveSuccessfulChannelIndex(attempt.channelIndex)
             binding.loadingText.visibility = View.GONE
+            startAutomaticUpdateCheck()
             Log.i(
                 TAG,
                 "Playback ready; loading overlay hidden: request=$requestId, " +
@@ -299,7 +362,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) enableImmersiveFullscreen()
+        if (hasFocus) {
+            enableImmersiveFullscreen()
+            maybeShowPendingUpdate()
+            maybeInstallPendingUpdate()
+        }
     }
     // endregion
 
@@ -718,6 +785,9 @@ class MainActivity : AppCompatActivity() {
     // 在 dispatchKeyEvent 提前吞掉这些键，浏览器永远拿不到，两个问题一并解决。
     // 菜单展开时，同一批方向键改为在菜单内导航（此时浏览器 View 仍在后面正常播放）。
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (updateDialog?.isShowing == true) {
+            return super.dispatchKeyEvent(event)
+        }
         val keyCode = event.keyCode
         if (isRemoteControlKey(keyCode)) {
             // 只在按下时执行动作；抬起事件也一并吞掉，避免只截按下、抬起漏给 WebView
@@ -1033,6 +1103,7 @@ class MainActivity : AppCompatActivity() {
         menuVisible = false
         binding.menuPanel.visibility = View.GONE
         if (!settingsVisible) cancelPanelAutoClose()
+        window.decorView.post { maybeShowPendingUpdate() }
     }
 
     /** 菜单展开态下的按键：上下在活动列内移动，左右切列，OK 选中，返回关闭。 */
@@ -1197,6 +1268,7 @@ class MainActivity : AppCompatActivity() {
         settingsVisible = false
         binding.settingsPanel.visibility = View.GONE
         if (!menuVisible) cancelPanelAutoClose()
+        window.decorView.post { maybeShowPendingUpdate() }
     }
 
     private fun handleSettingsKeyDown(keyCode: Int) {
@@ -1294,6 +1366,16 @@ class MainActivity : AppCompatActivity() {
                 settingsValueAdapter.setColumnActive(settingsActiveColumn == COLUMN_SETTING_VALUE)
                 binding.settingsValueList.scrollToPosition(selectedValueIndex)
             }
+            SettingsItem.CHECK_UPDATE -> {
+                binding.settingsAboutText.visibility = View.GONE
+                binding.settingsValueList.visibility = View.VISIBLE
+                settingsValueAdapter.submit(
+                    listOf(getString(R.string.setting_check_update_now)),
+                    keepIndex = 0,
+                )
+                settingsValueAdapter.setColumnActive(settingsActiveColumn == COLUMN_SETTING_VALUE)
+                binding.settingsValueList.scrollToPosition(0)
+            }
             SettingsItem.ABOUT -> {
                 settingsActiveColumn = COLUMN_SETTING_CATEGORY
                 binding.settingsValueList.visibility = View.GONE
@@ -1308,6 +1390,7 @@ class MainActivity : AppCompatActivity() {
     private fun settingsValueMaxIndex(): Int = when (selectedSettingsItem()) {
         SettingsItem.VIDEO_ENHANCEMENT -> VideoEnhancement.entries.lastIndex
         SettingsItem.CHANNEL_SWITCH_REVERSE -> 1
+        SettingsItem.CHECK_UPDATE -> 0
         SettingsItem.ABOUT -> 0
     }
 
@@ -1320,6 +1403,7 @@ class MainActivity : AppCompatActivity() {
         when (selectedSettingsItem()) {
             SettingsItem.VIDEO_ENHANCEMENT -> selectVideoEnhancement(position)
             SettingsItem.CHANNEL_SWITCH_REVERSE -> selectChannelSwitchReverse(position)
+            SettingsItem.CHECK_UPDATE -> performManualUpdateCheck()
             SettingsItem.ABOUT -> Unit
         }
     }
@@ -1361,7 +1445,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun SettingsItem.hasSelectableValues(): Boolean = when (this) {
         SettingsItem.VIDEO_ENHANCEMENT,
-        SettingsItem.CHANNEL_SWITCH_REVERSE -> true
+        SettingsItem.CHANNEL_SWITCH_REVERSE,
+        SettingsItem.CHECK_UPDATE -> true
         SettingsItem.ABOUT -> false
     }
 
@@ -1372,16 +1457,243 @@ class MainActivity : AppCompatActivity() {
 
     private fun packageVersionCode(): Long {
         val packageInfo = packageManager.getPackageInfo(packageName, 0)
-        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-            packageInfo.longVersionCode
-        } else {
-            @Suppress("DEPRECATION")
-            packageInfo.versionCode.toLong()
-        }
+        return packageInfo.longVersionCode
     }
 
     private fun playSettingsSound(soundConstant: Int) {
         binding.settingsPanel.playSoundEffect(soundConstant)
+    }
+    // endregion
+
+    // region 应用更新
+    private fun startAutomaticUpdateCheck() {
+        if (automaticUpdateCheckStarted || isFinishing || isDestroyed) return
+        automaticUpdateCheckStarted = true
+        uiHandler.removeCallbacks(automaticUpdateCheckRunnable)
+        if (updateCheckInProgress) return
+        updateCheckInProgress = true
+        activeUpdateCheckIsManual = false
+        updateManager.check(manual = false) { result ->
+            updateCheckInProgress = false
+            activeUpdateCheckIsManual = false
+            if (manualUpdateCheckQueued) {
+                manualUpdateCheckQueued = false
+                performManualUpdateCheck()
+            } else {
+                handleAutomaticUpdateResult(result)
+            }
+        }
+    }
+
+    private fun handleAutomaticUpdateResult(result: AppUpdateManager.CheckResult) {
+        if (isFinishing || isDestroyed) return
+        when (result) {
+            is AppUpdateManager.CheckResult.Available -> {
+                pendingUpdate = result
+                maybeShowPendingUpdate()
+            }
+            AppUpdateManager.CheckResult.UpToDate -> {
+                Log.i(TAG, "Automatic update check: current version is latest")
+            }
+            AppUpdateManager.CheckResult.Skipped -> {
+                Log.i(TAG, "Automatic update check: latest version was skipped")
+            }
+            is AppUpdateManager.CheckResult.Failed -> {
+                Log.w(TAG, "Automatic update check failed: ${result.message}")
+            }
+        }
+    }
+
+    private fun performManualUpdateCheck() {
+        if (updateCheckInProgress) {
+            if (!activeUpdateCheckIsManual) manualUpdateCheckQueued = true
+            Toast.makeText(this, R.string.update_checking, Toast.LENGTH_SHORT).show()
+            return
+        }
+        automaticUpdateCheckStarted = true
+        uiHandler.removeCallbacks(automaticUpdateCheckRunnable)
+        updateCheckInProgress = true
+        activeUpdateCheckIsManual = true
+        cancelPanelAutoClose()
+        Toast.makeText(this, R.string.update_checking, Toast.LENGTH_SHORT).show()
+        updateManager.check(manual = true) { result ->
+            updateCheckInProgress = false
+            activeUpdateCheckIsManual = false
+            if (isFinishing || isDestroyed) return@check
+            when (result) {
+                is AppUpdateManager.CheckResult.Available -> {
+                    pendingUpdate = result
+                    closeSettings()
+                    maybeShowPendingUpdate()
+                }
+                AppUpdateManager.CheckResult.UpToDate -> {
+                    Toast.makeText(this, R.string.update_up_to_date, Toast.LENGTH_SHORT).show()
+                    schedulePanelAutoClose()
+                }
+                AppUpdateManager.CheckResult.Skipped -> Unit
+                is AppUpdateManager.CheckResult.Failed -> {
+                    Toast.makeText(
+                        this,
+                        getString(R.string.update_check_failed, result.message),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    schedulePanelAutoClose()
+                }
+            }
+        }
+    }
+
+    private fun maybeShowPendingUpdate() {
+        val available = pendingUpdate ?: return
+        if (
+            updateDialog?.isShowing == true || menuVisible || settingsVisible ||
+            !window.decorView.hasWindowFocus() || isFinishing || isDestroyed
+        ) {
+            return
+        }
+        pendingUpdate = null
+        showUpdateDialog(available)
+    }
+
+    private fun showUpdateDialog(available: AppUpdateManager.CheckResult.Available) {
+        cancelPendingSingleTap()
+        hideTouchControls()
+        hideTouchAdjustment()
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.update_dialog_title, available.manifest.versionName))
+            .setMessage(
+                getString(
+                    R.string.update_dialog_message,
+                    packageVersionName(),
+                    available.manifest.versionName,
+                    available.manifest.releaseNotes,
+                ),
+            )
+            .setNegativeButton(R.string.update_skip_version) { _, _ ->
+                updateManager.skipVersion(available.manifest.versionCode)
+                Toast.makeText(
+                    this,
+                    getString(R.string.update_skipped, available.manifest.versionName),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+            .setPositiveButton(R.string.update_now) { _, _ ->
+                startUpdateDownload(available)
+            }
+            .setOnDismissListener { updateDialog = null }
+            .create()
+        updateDialog = dialog
+        dialog.setOnShowListener { dialog.getButton(AlertDialog.BUTTON_POSITIVE).requestFocus() }
+        dialog.show()
+    }
+
+    private fun startUpdateDownload(available: AppUpdateManager.CheckResult.Available) {
+        when (val result = updateManager.enqueue(available.manifest, available.asset)) {
+            is AppUpdateManager.EnqueueResult.Started -> {
+                Toast.makeText(
+                    this,
+                    getString(R.string.update_downloading, available.manifest.versionName),
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+            AppUpdateManager.EnqueueResult.AlreadyRunning -> {
+                updateManager.allowInstallRetry()
+                updateManager.inspectPending(::handlePendingDownload)
+            }
+            is AppUpdateManager.EnqueueResult.Failed -> {
+                Toast.makeText(
+                    this,
+                    getString(R.string.update_download_failed, result.message),
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
+    }
+
+    private fun handlePendingDownload(result: AppUpdateManager.PendingResult) {
+        if (isFinishing || isDestroyed) return
+        when (result) {
+            AppUpdateManager.PendingResult.None -> Unit
+            AppUpdateManager.PendingResult.Running -> {
+                Toast.makeText(this, R.string.update_download_running, Toast.LENGTH_SHORT).show()
+            }
+            is AppUpdateManager.PendingResult.Ready -> {
+                if (updateManager.wasInstallPrompted(result.task.downloadId)) return
+                pendingInstall = result
+                maybeInstallPendingUpdate()
+            }
+            is AppUpdateManager.PendingResult.Failed -> {
+                Toast.makeText(
+                    this,
+                    getString(R.string.update_verify_failed, result.message),
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
+    }
+
+    private fun maybeInstallPendingUpdate() {
+        val ready = pendingInstall ?: return
+        if (!window.decorView.hasWindowFocus() || isFinishing || isDestroyed) return
+        if (!canInstallPackages()) {
+            if (waitingForInstallPermission) return
+            waitingForInstallPermission = true
+            updateManager.markInstallPrompted(ready.task.downloadId)
+            Toast.makeText(
+                this,
+                R.string.update_allow_unknown_sources,
+                Toast.LENGTH_LONG,
+            ).show()
+            launchInstallPermissionSettings()
+            return
+        }
+        launchPackageInstaller(ready)
+    }
+
+    private fun canInstallPackages(): Boolean = packageManager.canRequestPackageInstalls()
+
+    private fun launchInstallPermissionSettings() {
+        val appSpecificIntent = Intent(
+            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+            Uri.parse("package:$packageName"),
+        )
+        try {
+            installPermissionLauncher.launch(appSpecificIntent)
+        } catch (firstError: ActivityNotFoundException) {
+            Log.w(TAG, "App-specific unknown sources settings unavailable", firstError)
+            try {
+                installPermissionLauncher.launch(Intent(Settings.ACTION_SECURITY_SETTINGS))
+            } catch (secondError: ActivityNotFoundException) {
+                waitingForInstallPermission = false
+                pendingInstall = null
+                Toast.makeText(
+                    this,
+                    R.string.update_install_permission_denied,
+                    Toast.LENGTH_LONG,
+                ).show()
+                Log.e(TAG, "No unknown sources settings available", secondError)
+            }
+        }
+    }
+
+    private fun launchPackageInstaller(ready: AppUpdateManager.PendingResult.Ready) {
+        val contentUri = FileProvider.getUriForFile(
+            this,
+            "$packageName.update-files",
+            ready.file,
+        )
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(contentUri, APK_MIME_TYPE)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        try {
+            updateManager.markInstallPrompted(ready.task.downloadId)
+            pendingInstall = null
+            startActivity(intent)
+        } catch (error: ActivityNotFoundException) {
+            updateManager.allowInstallRetry()
+            Toast.makeText(this, R.string.update_no_installer, Toast.LENGTH_LONG).show()
+            Log.e(TAG, "No package installer available", error)
+        }
     }
     // endregion
 
@@ -1395,6 +1707,14 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         if (::browserEngine.isInitialized) browserEngine.onResume()
         enableImmersiveFullscreen()
+        if (::updateManager.isInitialized && !pendingDownloadInspected) {
+            pendingDownloadInspected = true
+            updateManager.inspectPending(::handlePendingDownload)
+        }
+        window.decorView.post {
+            maybeShowPendingUpdate()
+            maybeInstallPendingUpdate()
+        }
     }
 
     override fun onDestroy() {
@@ -1403,8 +1723,14 @@ class MainActivity : AppCompatActivity() {
         uiHandler.removeCallbacks(hideTouchControlsRunnable)
         uiHandler.removeCallbacks(autoClosePanelRunnable)
         uiHandler.removeCallbacks(singleTapRunnable)
+        uiHandler.removeCallbacks(automaticUpdateCheckRunnable)
         uiHandler.removeCallbacks(loadChannelRunnable)
         cancelPlaybackAttempt()
+        updateDialog?.dismiss()
+        if (::updateManager.isInitialized) {
+            unregisterReceiver(downloadCompleteReceiver)
+            updateManager.close()
+        }
         if (::browserEngine.isInitialized) browserEngine.destroy()
         super.onDestroy()
     }

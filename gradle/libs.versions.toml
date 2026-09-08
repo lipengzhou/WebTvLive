@@ -8,6 +8,7 @@ appcompat = "1.6.1"
 material = "1.10.0"
 recyclerview = "1.3.2"
 geckoview = "153.0.20260810162159"
+json = "20180813"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -18,6 +19,7 @@ androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 androidx-recyclerview = { group = "androidx.recyclerview", name = "recyclerview", version.ref = "recyclerview" }
 geckoview = { group = "org.mozilla.geckoview", name = "geckoview", version.ref = "geckoview" }
+json = { group = "org.json", name = "json", version.ref = "json" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

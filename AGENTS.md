@@ -33,7 +33,7 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 # 原生 WebView 32 位：app/build/outputs/apk/webview/debug/app-webview-armeabi-v7a-debug.apk
 # 原生 WebView 64 位：app/build/outputs/apk/webview/debug/app-webview-arm64-v8a-debug.apk
 
-# 打 release APK（GitHub Release/正式分发用，需要先配置签名）
+# 打 release APK（Gitee Release/正式分发用，需要先配置签名）
 ./gradlew :app:assembleRelease -q
 # GeckoView 32 位：app/build/outputs/apk/gecko/release/app-gecko-armeabi-v7a-release.apk
 # GeckoView 64 位：app/build/outputs/apk/gecko/release/app-gecko-arm64-v8a-release.apk
@@ -91,7 +91,7 @@ adb -s 127.0.0.1:5555 logcat -d | grep -i "WebTvLive\|cctv\|Gecko\|MediaCodec"
 - 版本号使用 `0.0.x` 小版本递增策略；如无特殊说明，每次发版只递增最后一位 patch 号。例如 `0.0.1` 的下一版是 `0.0.2`。
 - `versionCode` 每次正式发版递增 1。
 - Git tag 使用 `v<versionName>` 格式，例如 `v0.0.1`。
-- 本地开发、模拟器调试用 `debug` APK；GitHub Release/正式分发只上传 `release` APK。
+- 本地开发、模拟器调试用 `debug` APK；Gitee Release/正式分发只上传 `release` APK。
 - release 签名信息从环境变量、Gradle property 或已被 Git 忽略的 `local.properties` 读取：
   - `WEBTVLIVE_RELEASE_STORE_FILE`
   - `WEBTVLIVE_RELEASE_STORE_PASSWORD`
@@ -104,7 +104,9 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ./gradlew :app:testGeckoDebugUnitTest :app:testWebviewDebugUnitTest :app:assembleRelease -q
 ```
 
-- GitHub Release 需要附带 release notes，并上传本次构建出的 APK。默认上传 `gecko` 和 `webview` 两个 flavor 的 arm64-v8a / armeabi-v7a release APK。
+- Gitee Release 需要附带 release notes，并上传 `gecko` 和 `webview` 两个 flavor 的 arm64-v8a / armeabi-v7a release APK。
+- App 的更新清单位于 `release/update.json`，下载链接必须是 `https://gitee.com/lipengzhou/WebTvLive/releases/download/v<versionName>/...apk`。
+- 推荐使用 `scripts/prepare-gitee-release.sh --notes <更新说明文件>` 构建、校验签名并生成清单。先创建 Gitee Release 并上传四个 APK，再执行 `scripts/prepare-gitee-release.sh --verify-remote`；所有链接通过后，最后提交并推送更新清单。
 - 发版提交、tag 和 release 不应包含无关本地改动，例如 `.idea/misc.xml`。
 
 ### 交互速查（当前实现）
@@ -115,6 +117,9 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 - **左/右**（`DPAD_LEFT` / `DPAD_RIGHT`）：标准态屏蔽（防止 WebView 滚动页面/移焦点）；菜单态在「分类列 ↔ 频道列」间切换焦点。
 - **返回键**：菜单态=关闭菜单；标准态=2 秒内按两次退出。
 - **菜单键**（`MENU` / `SETTINGS` / `TV_CONTENTS_MENU`）：标准态=从右侧呼出系统设置；设置态=关闭设置；频道菜单态=切换到系统设置。
+- 每次冷启动在首帧播放后检查 Gitee 静态更新清单，15 秒未首播则按兜底定时触发；无新版和检查失败均不打扰播放。
+- 新版提示支持“跳过此版本”和“更新”；返回键仅关闭本次提示。下载由系统 `DownloadManager` 在后台继续，完成后校验大小、SHA-256、包名、版本号和签名，再打开系统安装器。
+- 系统设置中的“检查更新”可手动检查，并且能够重新发现已跳过的版本。
 - 首次按最近成功频道的 `pid` 直达 `https://www.yangshipin.cn/tv/home?pid=...`；WebExtension 会核对页面实际选中频道，`pid` 失效时回退到按频道名点击。后续换台仍在当前页面按频道名点击并局部重建播放器。
 - 发出页内换台指令时立即显示全屏加载遮罩；WebExtension 必须确认央视频已替换旧 `<video>`，或复用的 `<video>` 触发了新一轮 `playing`，才发送带本次请求 ID 的 `playing` 隐藏遮罩，不能让旧频道或过期请求提前解除遮罩。
 - 每次播放器节点创建或换台重建后，WebExtension 会解除静音并持续把 `<video>.volume` 设为 `1`；不主动切换清晰度，使用官网默认/自适应策略。
