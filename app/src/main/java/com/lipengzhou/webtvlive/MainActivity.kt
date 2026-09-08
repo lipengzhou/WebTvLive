@@ -70,6 +70,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var settingsCategoryAdapter: MenuAdapter
     private lateinit var settingsValueAdapter: MenuAdapter
     private var videoEnhancement = VideoEnhancement.ORIGINAL
+    private var channelSwitchReversed = false
     // endregion
 
     // region 触屏亮度/音量状态
@@ -138,6 +139,7 @@ class MainActivity : AppCompatActivity() {
 
     private enum class SettingsItem(val titleRes: Int) {
         VIDEO_ENHANCEMENT(R.string.setting_video_enhancement),
+        CHANNEL_SWITCH_REVERSE(R.string.setting_channel_switch_reverse),
         ABOUT(R.string.setting_about),
     }
 
@@ -171,6 +173,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_LAST_CHANNEL = "last_channel_index"
         private const val KEY_LAST_SUCCESSFUL_CHANNEL = "last_successful_channel_index"
         private const val KEY_VIDEO_ENHANCEMENT = "video_enhancement"
+        private const val KEY_CHANNEL_SWITCH_REVERSED = "channel_switch_reversed"
         private const val KEY_PLAYBACK_BRIGHTNESS = "playback_brightness"
         // 侧边菜单两列
         private const val COLUMN_CATEGORY = 0
@@ -193,6 +196,7 @@ class MainActivity : AppCompatActivity() {
         lastSuccessfulChannelIndex = restoreLastSuccessfulChannelIndex()
         currentChannelIndex = lastSuccessfulChannelIndex
         videoEnhancement = restoreVideoEnhancement()
+        channelSwitchReversed = restoreChannelSwitchReversed()
         playbackBrightness = restorePlaybackBrightness()
         playbackBrightness?.let { applyPlaybackBrightness(it) }
         Log.i(TAG, "StartupTiming: activity_ready elapsed=${startupElapsed()}ms")
@@ -746,9 +750,13 @@ class MainActivity : AppCompatActivity() {
         when (keyCode) {
             KeyEvent.KEYCODE_BACK -> handleBack()
             // 上：下一个频道（cctv1 -> cctv2 …，到末尾循环回第一个）
-            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> switchChannel(+1)
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> {
+                switchChannel(remoteChannelDelta(+1))
+            }
             // 下：上一个频道（cctv2 -> cctv1 …，到开头循环回最后一个）
-            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> switchChannel(-1)
+            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> {
+                switchChannel(remoteChannelDelta(-1))
+            }
             // OK/中央键：呼出侧边频道菜单
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> openMenu()
             // MENU/设置键：从右侧呼出系统设置面板
@@ -758,6 +766,9 @@ class MainActivity : AppCompatActivity() {
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> { /* no-op：故意屏蔽 */ }
         }
     }
+
+    private fun remoteChannelDelta(defaultDelta: Int): Int =
+        if (channelSwitchReversed) -defaultDelta else defaultDelta
 
     /** 按 delta（+1/-1）循环切换频道。只更新下标 + 浮层反馈，真正加载走防抖，避免狂按时逐台请求被限流。 */
     private fun switchChannel(delta: Int) {
@@ -940,6 +951,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun restoreVideoEnhancement(): VideoEnhancement =
         VideoEnhancement.fromWireValue(prefs.getString(KEY_VIDEO_ENHANCEMENT, null))
+
+    private fun restoreChannelSwitchReversed(): Boolean =
+        prefs.getBoolean(KEY_CHANNEL_SWITCH_REVERSED, false)
 
     private fun startupElapsed(): Long = SystemClock.elapsedRealtime() - activityStartedAt
 
@@ -1168,7 +1182,7 @@ class MainActivity : AppCompatActivity() {
         closeMenu()
         setupSettings()
         settingsVisible = true
-        settingsActiveColumn = COLUMN_SETTING_VALUE
+        settingsActiveColumn = COLUMN_SETTING_CATEGORY
         settingsCategoryAdapter.setSelected(0)
         updateSettingsValuesForSelectedCategory()
         syncSettingsColumnActive()
@@ -1269,6 +1283,17 @@ class MainActivity : AppCompatActivity() {
                 settingsValueAdapter.setColumnActive(settingsActiveColumn == COLUMN_SETTING_VALUE)
                 binding.settingsValueList.scrollToPosition(selectedValueIndex)
             }
+            SettingsItem.CHANNEL_SWITCH_REVERSE -> {
+                val selectedValueIndex = if (channelSwitchReversed) 1 else 0
+                binding.settingsAboutText.visibility = View.GONE
+                binding.settingsValueList.visibility = View.VISIBLE
+                settingsValueAdapter.submit(
+                    channelSwitchReverseLabels(),
+                    keepIndex = selectedValueIndex,
+                )
+                settingsValueAdapter.setColumnActive(settingsActiveColumn == COLUMN_SETTING_VALUE)
+                binding.settingsValueList.scrollToPosition(selectedValueIndex)
+            }
             SettingsItem.ABOUT -> {
                 settingsActiveColumn = COLUMN_SETTING_CATEGORY
                 binding.settingsValueList.visibility = View.GONE
@@ -1282,6 +1307,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun settingsValueMaxIndex(): Int = when (selectedSettingsItem()) {
         SettingsItem.VIDEO_ENHANCEMENT -> VideoEnhancement.entries.lastIndex
+        SettingsItem.CHANNEL_SWITCH_REVERSE -> 1
         SettingsItem.ABOUT -> 0
     }
 
@@ -1293,6 +1319,7 @@ class MainActivity : AppCompatActivity() {
     private fun selectSettingsValue(position: Int) {
         when (selectedSettingsItem()) {
             SettingsItem.VIDEO_ENHANCEMENT -> selectVideoEnhancement(position)
+            SettingsItem.CHANNEL_SWITCH_REVERSE -> selectChannelSwitchReverse(position)
             SettingsItem.ABOUT -> Unit
         }
     }
@@ -1312,13 +1339,31 @@ class MainActivity : AppCompatActivity() {
         getString(level.labelRes) + if (level == videoEnhancement) "  ✓" else ""
     }
 
+    private fun selectChannelSwitchReverse(position: Int) {
+        schedulePanelAutoClose()
+        cancelPendingSingleTap()
+        channelSwitchReversed = position == 1
+        prefs.edit().putBoolean(KEY_CHANNEL_SWITCH_REVERSED, channelSwitchReversed).apply()
+        settingsValueAdapter.submit(channelSwitchReverseLabels(), keepIndex = position)
+        settingsValueAdapter.setColumnActive(settingsActiveColumn == COLUMN_SETTING_VALUE)
+    }
+
+    private fun channelSwitchReverseLabels(): List<String> = listOf(
+        getString(R.string.setting_off) + if (!channelSwitchReversed) "  ✓" else "",
+        getString(R.string.setting_on) + if (channelSwitchReversed) "  ✓" else "",
+    )
+
     private fun aboutText(): String = listOf(
         getString(R.string.about_developer),
         getString(R.string.about_engine, getString(R.string.browser_engine_name)),
         getString(R.string.about_version, packageVersionName(), packageVersionCode()),
     ).joinToString(separator = "\n")
 
-    private fun SettingsItem.hasSelectableValues(): Boolean = this == SettingsItem.VIDEO_ENHANCEMENT
+    private fun SettingsItem.hasSelectableValues(): Boolean = when (this) {
+        SettingsItem.VIDEO_ENHANCEMENT,
+        SettingsItem.CHANNEL_SWITCH_REVERSE -> true
+        SettingsItem.ABOUT -> false
+    }
 
     private fun packageVersionName(): String {
         val packageInfo = packageManager.getPackageInfo(packageName, 0)

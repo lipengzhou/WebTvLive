@@ -7,7 +7,10 @@
     <string name="channel_timeout_retry">频道加载较慢，正在重新连接</string>
     <string name="channel_timeout_manual">频道暂时无法播放，请按上下键切换频道</string>
     <string name="setting_video_enhancement">画质增强</string>
+    <string name="setting_channel_switch_reverse">换台反转</string>
     <string name="setting_about">关于</string>
+    <string name="setting_off">关闭</string>
+    <string name="setting_on">开启</string>
     <string name="video_enhancement_original">原始</string>
     <string name="video_enhancement_light">轻度增强</string>
     <string name="video_enhancement_standard">标准增强</string>
