@@ -1,28 +1,28 @@
 {
   "schemaVersion": 1,
-  "versionCode": 2,
-  "versionName": "0.0.2",
-  "releaseNotes": "优化正式安装包体积；新增上下键换台方向设置；更新应用名称、图标和关于信息。",
+  "versionCode": 3,
+  "versionName": "0.0.3",
+  "releaseNotes": "# WebTvLive 0.0.3\n\n本版本新增应用内自动更新能力，正式安装包统一通过 Gitee Release 分发。\n\n## 更新内容\n\n- 每次启动自动检查新版本；没有更新或检查失败时不打扰播放。\n- 系统设置新增“检查更新”，可随时手动检查。\n- 发现新版本时展示更新说明，支持“跳过此版本”或后台下载更新。\n- 自动匹配当前 GeckoView / WebView 内核及 32 位 / 64 位架构安装包。\n- 下载完成后校验文件大小、SHA-256、包名、版本号和签名，再启动系统安装器。\n- 支持下载任务恢复与未知来源安装授权引导。\n\n## APK 选择\n\n- 老电视或系统 WebView 较旧：优先安装 GeckoView 对应架构 APK。\n- 新系统或希望小包体：优先安装 WebView 对应架构 APK。\n- arm64-v8a 适用于 64 位 ARM 设备，armeabi-v7a 适用于 32 位 ARM 设备。\n\n## 合规说明\n\nWebTvLive 只嵌套展示电视台官网公开直播网页，不采集、不存储、不转发视频流，不破解登录、付费或清晰度限制。",
   "assets": {
     "gecko-arm64-v8a": {
-      "url": "https://gitee.com/lipengzhou/WebTvLive/releases/download/v0.0.2/app-gecko-arm64-v8a-release.apk",
-      "sizeBytes": 95244836,
-      "sha256": "8c1b31573faee6ca806588ec054cce973e315245ede2dbb4e83d0ed5b6c519b2"
+      "url": "https://gitee.com/lipengzhou/WebTvLive/releases/download/v0.0.3/app-gecko-arm64-v8a-release.apk",
+      "sizeBytes": 95304008,
+      "sha256": "bb8e4952409ab16c35b27824d427a9ee6f58de504eafe4f4c6def8815bdcf27b"
     },
     "gecko-armeabi-v7a": {
-      "url": "https://gitee.com/lipengzhou/WebTvLive/releases/download/v0.0.2/app-gecko-armeabi-v7a-release.apk",
-      "sizeBytes": 92597926,
-      "sha256": "1e0aa206ceef89269a2ffa57d4bd5e321d6ffd99ed7e34f8f30c35a34786ca32"
+      "url": "https://gitee.com/lipengzhou/WebTvLive/releases/download/v0.0.3/app-gecko-armeabi-v7a-release.apk",
+      "sizeBytes": 92657098,
+      "sha256": "37d38bcc5dbe27e63c9e938a965e1802ead11bb339df8ebddee8438a9ce8d54d"
     },
     "webview-arm64-v8a": {
-      "url": "https://gitee.com/lipengzhou/WebTvLive/releases/download/v0.0.2/app-webview-arm64-v8a-release.apk",
-      "sizeBytes": 2296521,
-      "sha256": "2a47afb54fb7bdf8d44884892d96ca62f28b785c405c56b2630e147fbf59c99b"
+      "url": "https://gitee.com/lipengzhou/WebTvLive/releases/download/v0.0.3/app-webview-arm64-v8a-release.apk",
+      "sizeBytes": 2346897,
+      "sha256": "f737bad22955bd3fc2b2bb552aecce4ce4690400cdf49ca9fc524c1dea35a2f2"
     },
     "webview-armeabi-v7a": {
-      "url": "https://gitee.com/lipengzhou/WebTvLive/releases/download/v0.0.2/app-webview-armeabi-v7a-release.apk",
-      "sizeBytes": 2296521,
-      "sha256": "2a47afb54fb7bdf8d44884892d96ca62f28b785c405c56b2630e147fbf59c99b"
+      "url": "https://gitee.com/lipengzhou/WebTvLive/releases/download/v0.0.3/app-webview-armeabi-v7a-release.apk",
+      "sizeBytes": 2346897,
+      "sha256": "f737bad22955bd3fc2b2bb552aecce4ce4690400cdf49ca9fc524c1dea35a2f2"
     }
   }
 }
