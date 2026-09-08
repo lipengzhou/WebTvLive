@@ -1,0 +1,4 @@
+interface:
+  display_name: "WebTvLive 发版"
+  short_description: "构建验签并同步发布 WebTvLive 到 Gitee 与 GitHub"
+  default_prompt: "使用 $webtvlive-release 将下一个经过完整校验的 WebTvLive 版本发布到 Gitee 和 GitHub。"
