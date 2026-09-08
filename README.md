@@ -156,6 +156,8 @@ WEBTVLIVE_RELEASE_KEY_PASSWORD=...
 ./gradlew :app:testGeckoDebugUnitTest :app:testWebviewDebugUnitTest :app:assembleRelease -q
 ```
 
+`assembleRelease` 会同时开启 R8/资源优化。
+
 Release APK 输出路径：
 
 ```text
