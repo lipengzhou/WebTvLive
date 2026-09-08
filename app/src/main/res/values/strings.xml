@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">WebTvLive</string>
+    <string name="app_name">看电视</string>
     <string name="loading">正在加载直播…</string>
     <string name="exit_hint">再按一次返回键退出</string>
     <string name="menu_hint_ok">按「确定」打开频道菜单</string>
@@ -7,10 +7,15 @@
     <string name="channel_timeout_retry">频道加载较慢，正在重新连接</string>
     <string name="channel_timeout_manual">频道暂时无法播放，请按上下键切换频道</string>
     <string name="setting_video_enhancement">画质增强</string>
+    <string name="setting_about">关于</string>
     <string name="video_enhancement_original">原始</string>
     <string name="video_enhancement_light">轻度增强</string>
     <string name="video_enhancement_standard">标准增强</string>
     <string name="video_enhancement_strong">强力增强</string>
+    <string name="about_developer">开发者：李鹏周</string>
+    <string name="about_version">版本号：%1$s（%2$d）</string>
+    <string name="about_engine">内核：%1$s</string>
+    <string name="about_version_unknown">未知</string>
     <string name="touch_adjustment_brightness">亮度 %1$d%%</string>
     <string name="touch_adjustment_volume">音量 %1$d%%</string>
     <string name="touch_action_channels">频道列表</string>

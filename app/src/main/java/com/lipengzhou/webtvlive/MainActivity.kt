@@ -136,6 +136,11 @@ class MainActivity : AppCompatActivity() {
         var lastPercent: Int = -1,
     )
 
+    private enum class SettingsItem(val titleRes: Int) {
+        VIDEO_ENHANCEMENT(R.string.setting_video_enhancement),
+        ABOUT(R.string.setting_about),
+    }
+
     companion object {
         private const val BACK_EXIT_INTERVAL = 2000L
         private const val CHANNEL_NAME_SHOW_MS = 3000L
@@ -1133,10 +1138,14 @@ class MainActivity : AppCompatActivity() {
         if (settingsInitialized) return
         settingsInitialized = true
         settingsCategoryAdapter = MenuAdapter(R.layout.item_category) {
-            focusSettingsColumn(COLUMN_SETTING_VALUE)
+            settingsCategoryAdapter.setSelected(it)
+            updateSettingsValuesForSelectedCategory()
+            if (selectedSettingsItem().hasSelectableValues()) {
+                focusSettingsColumn(COLUMN_SETTING_VALUE)
+            }
         }
         settingsValueAdapter = MenuAdapter(R.layout.item_channel) { position ->
-            selectVideoEnhancement(position)
+            selectSettingsValue(position)
         }
         binding.settingsCategoryList.layoutManager = LinearLayoutManager(this)
         binding.settingsCategoryList.adapter = settingsCategoryAdapter
@@ -1145,7 +1154,7 @@ class MainActivity : AppCompatActivity() {
         binding.settingsValueList.adapter = settingsValueAdapter
         binding.settingsValueList.itemAnimator = null
         settingsCategoryAdapter.submit(
-            listOf(getString(R.string.setting_video_enhancement)),
+            SettingsItem.entries.map { getString(it.titleRes) },
             keepIndex = 0,
         )
     }
@@ -1160,11 +1169,12 @@ class MainActivity : AppCompatActivity() {
         setupSettings()
         settingsVisible = true
         settingsActiveColumn = COLUMN_SETTING_VALUE
-        val selected = VideoEnhancement.entries.indexOf(videoEnhancement)
-        settingsValueAdapter.submit(videoEnhancementLabels(), keepIndex = selected)
+        settingsCategoryAdapter.setSelected(0)
+        updateSettingsValuesForSelectedCategory()
         syncSettingsColumnActive()
         binding.settingsPanel.visibility = View.VISIBLE
-        binding.settingsValueList.scrollToPosition(selected)
+        binding.settingsCategoryList.scrollToPosition(settingsCategoryAdapter.selectedIndex)
+        binding.settingsValueList.scrollToPosition(settingsValueAdapter.selectedIndex)
         schedulePanelAutoClose()
     }
 
@@ -1189,7 +1199,10 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             KeyEvent.KEYCODE_DPAD_LEFT -> {
-                if (focusSettingsColumn(COLUMN_SETTING_VALUE)) {
+                if (
+                    selectedSettingsItem().hasSelectableValues() &&
+                    focusSettingsColumn(COLUMN_SETTING_VALUE)
+                ) {
                     playSettingsSound(SoundEffectConstants.NAVIGATION_LEFT)
                 }
             }
@@ -1200,9 +1213,11 @@ class MainActivity : AppCompatActivity() {
             }
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
                 if (settingsActiveColumn == COLUMN_SETTING_CATEGORY) {
-                    focusSettingsColumn(COLUMN_SETTING_VALUE)
+                    if (selectedSettingsItem().hasSelectableValues()) {
+                        focusSettingsColumn(COLUMN_SETTING_VALUE)
+                    }
                 } else {
-                    selectVideoEnhancement(settingsValueAdapter.selectedIndex)
+                    selectSettingsValue(settingsValueAdapter.selectedIndex)
                 }
                 playSettingsSound(SoundEffectConstants.CLICK)
             }
@@ -1210,16 +1225,28 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun moveSettingsSelection(delta: Int): Boolean {
-        if (settingsActiveColumn == COLUMN_SETTING_CATEGORY) return false
-        val next = (settingsValueAdapter.selectedIndex + delta)
-            .coerceIn(0, VideoEnhancement.entries.lastIndex)
-        if (next == settingsValueAdapter.selectedIndex) return false
-        settingsValueAdapter.setSelected(next)
-        binding.settingsValueList.scrollToPosition(next)
+        if (settingsActiveColumn == COLUMN_SETTING_CATEGORY) {
+            val next = (settingsCategoryAdapter.selectedIndex + delta)
+                .coerceIn(0, SettingsItem.entries.lastIndex)
+            if (next == settingsCategoryAdapter.selectedIndex) return false
+            settingsCategoryAdapter.setSelected(next)
+            binding.settingsCategoryList.scrollToPosition(next)
+            updateSettingsValuesForSelectedCategory()
+        } else {
+            if (!selectedSettingsItem().hasSelectableValues()) return false
+            val maxIndex = settingsValueMaxIndex()
+            val next = (settingsValueAdapter.selectedIndex + delta).coerceIn(0, maxIndex)
+            if (next == settingsValueAdapter.selectedIndex) return false
+            settingsValueAdapter.setSelected(next)
+            binding.settingsValueList.scrollToPosition(next)
+        }
         return true
     }
 
     private fun focusSettingsColumn(column: Int): Boolean {
+        if (column == COLUMN_SETTING_VALUE && !selectedSettingsItem().hasSelectableValues()) {
+            return false
+        }
         if (settingsActiveColumn == column) return false
         settingsActiveColumn = column
         syncSettingsColumnActive()
@@ -1229,6 +1256,45 @@ class MainActivity : AppCompatActivity() {
     private fun syncSettingsColumnActive() {
         settingsCategoryAdapter.setColumnActive(settingsActiveColumn == COLUMN_SETTING_CATEGORY)
         settingsValueAdapter.setColumnActive(settingsActiveColumn == COLUMN_SETTING_VALUE)
+    }
+
+    private fun updateSettingsValuesForSelectedCategory() {
+        val selectedItem = selectedSettingsItem()
+        when (selectedItem) {
+            SettingsItem.VIDEO_ENHANCEMENT -> {
+                val selectedValueIndex = VideoEnhancement.entries.indexOf(videoEnhancement)
+                binding.settingsAboutText.visibility = View.GONE
+                binding.settingsValueList.visibility = View.VISIBLE
+                settingsValueAdapter.submit(videoEnhancementLabels(), keepIndex = selectedValueIndex)
+                settingsValueAdapter.setColumnActive(settingsActiveColumn == COLUMN_SETTING_VALUE)
+                binding.settingsValueList.scrollToPosition(selectedValueIndex)
+            }
+            SettingsItem.ABOUT -> {
+                settingsActiveColumn = COLUMN_SETTING_CATEGORY
+                binding.settingsValueList.visibility = View.GONE
+                binding.settingsAboutText.text = aboutText()
+                binding.settingsAboutText.visibility = View.VISIBLE
+                settingsValueAdapter.submit(emptyList(), keepIndex = 0)
+                syncSettingsColumnActive()
+            }
+        }
+    }
+
+    private fun settingsValueMaxIndex(): Int = when (selectedSettingsItem()) {
+        SettingsItem.VIDEO_ENHANCEMENT -> VideoEnhancement.entries.lastIndex
+        SettingsItem.ABOUT -> 0
+    }
+
+    private fun selectedSettingsItem(): SettingsItem =
+        SettingsItem.entries.getOrElse(settingsCategoryAdapter.selectedIndex) {
+            SettingsItem.VIDEO_ENHANCEMENT
+        }
+
+    private fun selectSettingsValue(position: Int) {
+        when (selectedSettingsItem()) {
+            SettingsItem.VIDEO_ENHANCEMENT -> selectVideoEnhancement(position)
+            SettingsItem.ABOUT -> Unit
+        }
     }
 
     private fun selectVideoEnhancement(position: Int) {
@@ -1244,6 +1310,29 @@ class MainActivity : AppCompatActivity() {
 
     private fun videoEnhancementLabels(): List<String> = VideoEnhancement.entries.map { level ->
         getString(level.labelRes) + if (level == videoEnhancement) "  ✓" else ""
+    }
+
+    private fun aboutText(): String = listOf(
+        getString(R.string.about_developer),
+        getString(R.string.about_engine, getString(R.string.browser_engine_name)),
+        getString(R.string.about_version, packageVersionName(), packageVersionCode()),
+    ).joinToString(separator = "\n")
+
+    private fun SettingsItem.hasSelectableValues(): Boolean = this == SettingsItem.VIDEO_ENHANCEMENT
+
+    private fun packageVersionName(): String {
+        val packageInfo = packageManager.getPackageInfo(packageName, 0)
+        return packageInfo.versionName ?: getString(R.string.about_version_unknown)
+    }
+
+    private fun packageVersionCode(): Long {
+        val packageInfo = packageManager.getPackageInfo(packageName, 0)
+        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            packageInfo.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            packageInfo.versionCode.toLong()
+        }
     }
 
     private fun playSettingsSound(soundConstant: Int) {
