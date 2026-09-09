@@ -19,16 +19,10 @@ description: 构建、验签、提交、打标签，并将 WebTvLive Android 正
 ## 构建与准备
 
 1. 修改 `app/build.gradle.kts` 中的 `versionCode` 和基础 `versionName`。不要手工添加 flavor 后缀；Gradle 会自动添加 `-gecko` 和 `-webview`。
-2. 使用 Android Studio JBR 执行完整校验：
+2. 使用 Android Studio JBR。仓库唯一质量门禁是 `scripts/verify.sh`，不得另行拼装一套 Gradle 校验任务；下一步的发布准备脚本会先调用该门禁：
 
 ```bash
 export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
-./gradlew \
-  :app:testGeckoDebugUnitTest \
-  :app:testWebviewDebugUnitTest \
-  :app:lintGeckoDebug \
-  :app:lintWebviewDebug \
-  :app:assembleRelease
 ```
 
 3. 将发布说明写入临时文件，执行：

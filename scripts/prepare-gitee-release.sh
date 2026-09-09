@@ -129,7 +129,8 @@ APKSIGNER=$(latest_build_tool apksigner)
 [[ -x "$APKSIGNER" ]] || { echo "找不到 Android build-tools/apksigner" >&2; exit 1; }
 
 cd "$ROOT_DIR"
-./gradlew :app:testGeckoDebugUnitTest :app:testWebviewDebugUnitTest :app:assembleRelease -q
+./scripts/verify.sh
+./gradlew :app:assembleRelease -q
 
 VERSION_CODE=""
 VERSION_NAME=""

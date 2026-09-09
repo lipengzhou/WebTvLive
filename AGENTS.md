@@ -26,6 +26,9 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ./gradlew :app:compileGeckoDebugKotlin -q
 ./gradlew :app:compileWebviewDebugKotlin -q
 
+# 完整质量门禁（Shell/JS/JSON、双 flavor 单测与 Lint、四个 Debug APK、diff）
+./scripts/verify.sh
+
 # 打 debug APK（本地开发/模拟器调试用，按内核 flavor + ABI 分包）
 ./gradlew :app:assembleDebug -q
 # GeckoView 32 位：app/build/outputs/apk/gecko/debug/app-gecko-armeabi-v7a-debug.apk
@@ -97,11 +100,12 @@ adb -s 127.0.0.1:5555 logcat -d | grep -i "WebTvLive\|cctv\|Gecko\|MediaCodec"
   - `WEBTVLIVE_RELEASE_STORE_PASSWORD`
   - `WEBTVLIVE_RELEASE_KEY_ALIAS`
   - `WEBTVLIVE_RELEASE_KEY_PASSWORD`
-- 发版前至少执行：
+- `scripts/prepare-gitee-release.sh` 会先调用统一质量门禁。手工构建正式包时至少执行：
 
 ```bash
 export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
-./gradlew :app:testGeckoDebugUnitTest :app:testWebviewDebugUnitTest :app:assembleRelease -q
+./scripts/verify.sh
+./gradlew :app:assembleRelease -q
 ```
 
 - Gitee Release 需要附带 release notes，并上传 `gecko` 和 `webview` 两个 flavor 的 arm64-v8a / armeabi-v7a release APK。

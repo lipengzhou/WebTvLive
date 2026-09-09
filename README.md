@@ -131,11 +131,15 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ./gradlew :app:compileWebviewDebugKotlin -q
 ```
 
-运行单元测试并打本地调试包：
+完整验证统一通过仓库质量门禁执行：
 
 ```bash
-./gradlew :app:testGeckoDebugUnitTest :app:testWebviewDebugUnitTest :app:assembleDebug -q
+./scripts/verify.sh
 ```
+
+该脚本依次检查 Shell、JavaScript 和 JSON 语法，运行 Gecko/WebView 双 flavor
+单元测试与 Android Lint，构建四个 Debug APK，并执行 `git diff --check`。GitHub
+Actions 和正式发版脚本也调用同一入口。
 
 Debug APK 用于本地开发和模拟器调试，输出路径：
 
@@ -155,8 +159,10 @@ WEBTVLIVE_RELEASE_KEY_ALIAS=webtvlive
 WEBTVLIVE_RELEASE_KEY_PASSWORD=...
 ```
 
+如需单独在本地构建正式包，先执行 `./scripts/verify.sh`，再执行：
+
 ```bash
-./gradlew :app:testGeckoDebugUnitTest :app:testWebviewDebugUnitTest :app:assembleRelease -q
+./gradlew :app:assembleRelease -q
 ```
 
 `assembleRelease` 会同时开启 R8/资源优化，并压缩 APK 内的 native `.so`。输出文件仍是
@@ -182,7 +188,7 @@ App 从 `release/update.json` 检查版本，APK 下载地址固定使用 Gitee 
 ./scripts/prepare-gitee-release.sh --notes /path/to/release-notes.txt
 ```
 
-脚本会运行双 flavor 单元测试和 release 构建，校验四个 APK 的版本、签名，计算文件大小与 SHA-256，并生成更新清单。随后在 Gitee 创建 `v<versionName>` Release，上传四个 APK；上传完成后执行：
+脚本会先调用统一质量门禁，再运行 release 构建，校验四个 APK 的版本、签名，计算文件大小与 SHA-256，并生成更新清单。随后在 Gitee 创建 `v<versionName>` Release，上传四个 APK；上传完成后执行：
 
 ```bash
 ./scripts/prepare-gitee-release.sh --verify-remote
