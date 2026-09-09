@@ -41,4 +41,8 @@
     <string name="touch_action_channels">频道列表</string>
     <string name="touch_action_settings">系统设置</string>
     <string name="touch_action_exit">退出</string>
+    <string name="program_guide_loading">正在加载节目单…</string>
+    <string name="program_guide_empty">今日暂无节目</string>
+    <string name="program_guide_failed">节目单加载失败</string>
+    <string name="program_guide_replay_unsupported">暂不支持回看</string>
 </resources>

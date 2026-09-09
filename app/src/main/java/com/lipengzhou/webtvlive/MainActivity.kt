@@ -63,6 +63,8 @@ class MainActivity : AppCompatActivity() {
     private var activeUpdateCheckIsManual = false
     private var pendingDownloadInspected = false
     private var waitingForInstallPermission = false
+    private var replayUnsupportedToast: Toast? = null
+    private var replayUnsupportedToastShownAt = 0L
 
     // 返回键两次退出
     private var lastBackPressedTime = 0L
@@ -78,13 +80,17 @@ class MainActivity : AppCompatActivity() {
     // region 侧边菜单状态
     // 菜单是否展开。菜单只是盖在视频上的左侧浮层，展开期间不碰浏览器 View，视频照常播放。
     private var menuVisible = false
-    // 当前活动列：左=分类，右=频道。方向键上/下作用在活动列上，左/右在两列间切换。
+    // 当前活动列：分类、频道或节目单。方向键上/下作用在活动列上。
     private var activeColumn = COLUMN_CHANNEL
     // 右栏当前展示的是哪个分类的频道
     private var menuCategoryIndex = 0
 
     private lateinit var categoryAdapter: MenuAdapter
     private lateinit var channelAdapter: MenuAdapter
+    private lateinit var programGuideAdapter: ProgramGuideAdapter
+    private lateinit var programGuideRepository: ProgramGuideRepository
+    private var selectedProgramGuidePid: String? = null
+    private var selectedProgramGuideDate: String? = null
     private var menuInitialized = false
     // endregion
 
@@ -128,6 +134,21 @@ class MainActivity : AppCompatActivity() {
     }
     // 换台防抖：狂按遥控器时不每次都加载，停手后只对最终频道加载一次
     private val loadChannelRunnable = Runnable { loadCurrentChannel() }
+    private val loadProgramGuideRunnable = Runnable { loadSelectedProgramGuide() }
+    private val refreshProgramGuideClockRunnable = object : Runnable {
+        override fun run() {
+            if (!menuVisible || !::programGuideAdapter.isInitialized) return
+            if (selectedProgramGuideDate != ProgramGuideRepository.today()) {
+                scheduleSelectedProgramGuideLoad()
+            } else {
+                val currentIndex = programGuideAdapter.updateNow()
+                if (activeColumn != COLUMN_PROGRAM_GUIDE && currentIndex >= 0) {
+                    scrollProgramGuideToOneThird(currentIndex)
+                }
+            }
+            uiHandler.postDelayed(this, PROGRAM_GUIDE_CLOCK_REFRESH_MS)
+        }
+    }
     private val playbackTimeoutRunnable = Runnable { handlePlaybackTimeout() }
     private val automaticUpdateCheckRunnable = Runnable { startAutomaticUpdateCheck() }
 
@@ -189,6 +210,9 @@ class MainActivity : AppCompatActivity() {
         private const val DEFAULT_SYSTEM_BRIGHTNESS = 0.5f
         // 换台防抖：停止按键 600ms 后才真正加载，避免连续切台把每个中间台都请求一遍被 CCTV 限流
         private const val CHANNEL_SWITCH_DEBOUNCE_MS = 600L
+        private const val PROGRAM_GUIDE_LOAD_DEBOUNCE_MS = 250L
+        private const val PROGRAM_GUIDE_CLOCK_REFRESH_MS = 60_000L
+        private const val REPLAY_UNSUPPORTED_TOAST_THROTTLE_MS = 2_000L
         // 已加载页面内换台通常很快；超时后改用该频道的官网 pid 页面重新建链。
         private const val IN_PAGE_PLAYBACK_TIMEOUT_MS = 18_000L
         // 低性能电视冷启动实测正常首播也可能接近 30 秒，因此整页加载给更宽松的窗口。
@@ -207,9 +231,10 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_VIDEO_ENHANCEMENT = "video_enhancement"
         private const val KEY_CHANNEL_SWITCH_REVERSED = "channel_switch_reversed"
         private const val KEY_PLAYBACK_BRIGHTNESS = "playback_brightness"
-        // 侧边菜单两列
+        // 侧边菜单三列
         private const val COLUMN_CATEGORY = 0
         private const val COLUMN_CHANNEL = 1
+        private const val COLUMN_PROGRAM_GUIDE = 2
         private const val COLUMN_SETTING_CATEGORY = 0
         private const val COLUMN_SETTING_VALUE = 1
         private const val TAG = "WebTvLive"
@@ -269,6 +294,7 @@ class MainActivity : AppCompatActivity() {
         channelSwitchReversed = restoreChannelSwitchReversed()
         playbackBrightness = restorePlaybackBrightness()
         playbackBrightness?.let { applyPlaybackBrightness(it) }
+        programGuideRepository = ProgramGuideRepository(applicationContext)
         Log.i(TAG, "StartupTiming: activity_ready elapsed=${startupElapsed()}ms")
         createAndAttachBrowserEngine()
         if (BuildConfig.APP_UPDATES_ENABLED) {
@@ -1077,6 +1103,15 @@ class MainActivity : AppCompatActivity() {
         binding.channelList.layoutManager = LinearLayoutManager(this)
         binding.channelList.adapter = channelAdapter
         binding.channelList.itemAnimator = null
+        programGuideAdapter = ProgramGuideAdapter { position ->
+            schedulePanelAutoClose()
+            focusColumn(COLUMN_PROGRAM_GUIDE)
+            programGuideAdapter.setSelected(position)
+            showReplayUnsupported()
+        }
+        binding.programGuideList.layoutManager = LinearLayoutManager(this)
+        binding.programGuideList.adapter = programGuideAdapter
+        binding.programGuideList.itemAnimator = null
 
         categoryAdapter.submit(TvCatalog.categories.map { it.name }, keepIndex = 0)
     }
@@ -1105,6 +1140,9 @@ class MainActivity : AppCompatActivity() {
         binding.menuPanel.visibility = View.VISIBLE
         binding.categoryList.scrollToPosition(catIndex)
         binding.channelList.scrollToPosition(chIndex)
+        scheduleSelectedProgramGuideLoad()
+        uiHandler.removeCallbacks(refreshProgramGuideClockRunnable)
+        uiHandler.postDelayed(refreshProgramGuideClockRunnable, PROGRAM_GUIDE_CLOCK_REFRESH_MS)
         schedulePanelAutoClose()
     }
 
@@ -1112,6 +1150,10 @@ class MainActivity : AppCompatActivity() {
     private fun closeMenu() {
         if (!menuVisible) return
         menuVisible = false
+        selectedProgramGuidePid = null
+        selectedProgramGuideDate = null
+        uiHandler.removeCallbacks(loadProgramGuideRunnable)
+        uiHandler.removeCallbacks(refreshProgramGuideClockRunnable)
         binding.menuPanel.visibility = View.GONE
         if (!settingsVisible) cancelPanelAutoClose()
         window.decorView.post { maybeShowPendingUpdate() }
@@ -1134,12 +1176,26 @@ class MainActivity : AppCompatActivity() {
                 if (moveSelection(+1)) playMenuSound(SoundEffectConstants.NAVIGATION_DOWN)
             }
             KeyEvent.KEYCODE_DPAD_LEFT -> {
-                if (focusColumn(COLUMN_CATEGORY)) {
+                val target = when (activeColumn) {
+                    COLUMN_PROGRAM_GUIDE -> COLUMN_CHANNEL
+                    COLUMN_CHANNEL -> COLUMN_CATEGORY
+                    else -> COLUMN_CATEGORY
+                }
+                if (focusColumn(target)) {
                     playMenuSound(SoundEffectConstants.NAVIGATION_LEFT)
                 }
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                if (focusColumn(COLUMN_CHANNEL)) {
+                val target = when (activeColumn) {
+                    COLUMN_CATEGORY -> COLUMN_CHANNEL
+                    COLUMN_CHANNEL -> if (programGuideAdapter.itemCount > 0) {
+                        COLUMN_PROGRAM_GUIDE
+                    } else {
+                        COLUMN_CHANNEL
+                    }
+                    else -> COLUMN_PROGRAM_GUIDE
+                }
+                if (focusColumn(target)) {
                     playMenuSound(SoundEffectConstants.NAVIGATION_RIGHT)
                 }
             }
@@ -1159,12 +1215,20 @@ class MainActivity : AppCompatActivity() {
             binding.categoryList.scrollToPosition(next)
             // 左列移动即预览：右列实时换成该分类的频道（默认选第一个），但不加载、不切台
             previewCategory(next)
-        } else {
+        } else if (activeColumn == COLUMN_CHANNEL) {
             val size = TvCatalog.categories[menuCategoryIndex].channels.size
             val next = (channelAdapter.selectedIndex + delta).coerceIn(0, size - 1)
             if (next == channelAdapter.selectedIndex) return false
             channelAdapter.setSelected(next)
             binding.channelList.scrollToPosition(next)
+            scheduleSelectedProgramGuideLoad()
+        } else {
+            val size = programGuideAdapter.itemCount
+            if (size == 0) return false
+            val next = (programGuideAdapter.selectedIndex + delta).coerceIn(0, size - 1)
+            if (next == programGuideAdapter.selectedIndex) return false
+            programGuideAdapter.setSelected(next)
+            binding.programGuideList.scrollToPosition(next)
         }
         return true
     }
@@ -1185,16 +1249,35 @@ class MainActivity : AppCompatActivity() {
             keepIndex = 0,
         )
         binding.channelList.scrollToPosition(0)
+        scheduleSelectedProgramGuideLoad()
     }
 
-    /** OK：在分类列则跳到频道列；在频道列则选中并换台。 */
+    /** OK：在分类列进入频道列，在频道列选中换台；节目单列只用于浏览。 */
     private fun confirmMenuSelection(): Boolean {
-        if (activeColumn == COLUMN_CATEGORY) {
-            focusColumn(COLUMN_CHANNEL)
-        } else {
-            onChannelChosen(channelAdapter.selectedIndex)
+        return when (activeColumn) {
+            COLUMN_CATEGORY -> focusColumn(COLUMN_CHANNEL)
+            COLUMN_CHANNEL -> {
+                onChannelChosen(channelAdapter.selectedIndex)
+                true
+            }
+            COLUMN_PROGRAM_GUIDE -> {
+                showReplayUnsupported()
+                true
+            }
+            else -> false
         }
-        return true
+    }
+
+    private fun showReplayUnsupported() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - replayUnsupportedToastShownAt < REPLAY_UNSUPPORTED_TOAST_THROTTLE_MS) return
+        replayUnsupportedToastShownAt = now
+        replayUnsupportedToast?.cancel()
+        replayUnsupportedToast = Toast.makeText(
+            this,
+            R.string.program_guide_replay_unsupported,
+            Toast.LENGTH_SHORT,
+        ).also(Toast::show)
     }
 
     /** 播放设备系统提供的菜单操作音，并自动遵循系统的按键音效设置。 */
@@ -1226,6 +1309,91 @@ class MainActivity : AppCompatActivity() {
     private fun syncColumnActive() {
         categoryAdapter.setColumnActive(activeColumn == COLUMN_CATEGORY)
         channelAdapter.setColumnActive(activeColumn == COLUMN_CHANNEL)
+        programGuideAdapter.setColumnActive(activeColumn == COLUMN_PROGRAM_GUIDE)
+    }
+
+    /** 停稳后才请求，避免遥控器快速划过频道时产生一串无用网络请求。 */
+    private fun scheduleSelectedProgramGuideLoad() {
+        if (!menuVisible) return
+        val channel = TvCatalog.categories[menuCategoryIndex]
+            .channels.getOrNull(channelAdapter.selectedIndex) ?: return
+        selectedProgramGuidePid = channel.pid
+        selectedProgramGuideDate = ProgramGuideRepository.today()
+        // 防抖期间先隐藏旧频道内容，但不提前显示“正在加载”。loadToday 会同步检查
+        // 内存/磁盘缓存，只有确认无缓存并准备发起网络请求时才返回 Loading。
+        binding.programGuideList.visibility = View.INVISIBLE
+        binding.programGuideStatus.visibility = View.GONE
+        programGuideAdapter.submit(emptyList())
+        uiHandler.removeCallbacks(loadProgramGuideRunnable)
+        uiHandler.postDelayed(loadProgramGuideRunnable, PROGRAM_GUIDE_LOAD_DEBOUNCE_MS)
+    }
+
+    private fun loadSelectedProgramGuide() {
+        if (!menuVisible) return
+        val channel = TvCatalog.categories[menuCategoryIndex]
+            .channels.getOrNull(channelAdapter.selectedIndex) ?: return
+        val pid = channel.pid
+        if (selectedProgramGuidePid != pid) return
+        programGuideRepository.loadToday(pid) { result ->
+            if (!menuVisible || selectedProgramGuidePid != pid) return@loadToday
+            when (result) {
+                ProgramGuideRepository.Result.Loading -> showProgramGuideStatus(
+                    R.string.program_guide_loading,
+                )
+                is ProgramGuideRepository.Result.Data -> showProgramGuide(result.guide)
+                is ProgramGuideRepository.Result.Error -> if (!result.hasCachedData) {
+                    showProgramGuideStatus(R.string.program_guide_failed)
+                }
+            }
+        }
+    }
+
+    private fun showProgramGuide(guide: ProgramGuide) {
+        if (guide.items.isEmpty()) {
+            showProgramGuideStatus(R.string.program_guide_empty)
+            return
+        }
+        val revealAfterPositioning = binding.programGuideList.visibility != View.VISIBLE
+        binding.programGuideStatus.visibility = View.GONE
+        if (revealAfterPositioning) {
+            // INVISIBLE 仍会参与测量和布局，但不会把尚未定位的列表绘制出来。
+            binding.programGuideList.visibility = View.INVISIBLE
+        }
+        val currentIndex = programGuideAdapter.submit(guide.items)
+        scrollProgramGuideToOneThird(
+            position = currentIndex.coerceAtLeast(0),
+            revealAfterPositioning = revealAfterPositioning,
+        )
+        syncColumnActive()
+    }
+
+    /** 把当前节目行的中心稳定放在列表垂直方向从顶部向下三分之一处。 */
+    private fun scrollProgramGuideToOneThird(
+        position: Int,
+        revealAfterPositioning: Boolean = false,
+    ) {
+        binding.programGuideList.post {
+            if (!menuVisible || position !in 0 until programGuideAdapter.itemCount) return@post
+            val layoutManager = binding.programGuideList.layoutManager as? LinearLayoutManager
+                ?: return@post
+            val itemHeight = 52f.dp().roundToInt()
+            val targetOffset = (binding.programGuideList.height / 3 - itemHeight / 2)
+                .coerceAtLeast(binding.programGuideList.paddingTop)
+            layoutManager.scrollToPositionWithOffset(position, targetOffset)
+            if (revealAfterPositioning) {
+                binding.programGuideList.visibility = View.VISIBLE
+            }
+        }
+    }
+
+    private fun showProgramGuideStatus(messageRes: Int) {
+        programGuideAdapter.submit(emptyList())
+        if (activeColumn == COLUMN_PROGRAM_GUIDE) focusColumn(COLUMN_CHANNEL)
+        binding.programGuideList.visibility = View.GONE
+        binding.programGuideStatus.apply {
+            visibility = View.VISIBLE
+            setText(messageRes)
+        }
     }
     // endregion
 
@@ -1738,12 +1906,17 @@ class MainActivity : AppCompatActivity() {
         uiHandler.removeCallbacks(singleTapRunnable)
         uiHandler.removeCallbacks(automaticUpdateCheckRunnable)
         uiHandler.removeCallbacks(loadChannelRunnable)
+        uiHandler.removeCallbacks(loadProgramGuideRunnable)
+        uiHandler.removeCallbacks(refreshProgramGuideClockRunnable)
         cancelPlaybackAttempt()
+        replayUnsupportedToast?.cancel()
+        replayUnsupportedToast = null
         updateDialog?.dismiss()
         if (::updateManager.isInitialized) {
             unregisterReceiver(downloadCompleteReceiver)
             updateManager.close()
         }
+        if (::programGuideRepository.isInitialized) programGuideRepository.close()
         if (::browserEngine.isInitialized) browserEngine.destroy()
         super.onDestroy()
     }

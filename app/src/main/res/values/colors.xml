@@ -18,5 +18,6 @@
     <color name="menu_item_selected_dim">#40FFFFFF</color>
     <color name="menu_text_primary">#FFFFFFFF</color>
     <color name="menu_text_secondary">#B3FFFFFF</color>
+    <color name="program_guide_current_bg">#592F80ED</color>
 
 </resources>

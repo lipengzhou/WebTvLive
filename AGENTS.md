@@ -136,14 +136,15 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 - WebExtension 不再每 500ms 全量扫描 DOM：频道和播放器发现由 `MutationObserver` 驱动，播放完成由 `playing` 等媒体事件驱动；仅在受控节点样式被官网改写时定向修复。
 - WebExtension 后台脚本会保守拦截已确认无关的频道封面、二维码/页脚图片与路由 chunk 推测性预取；频道 API、播放器脚本、WASM、媒体、鉴权、登录和统计请求默认放行。统计请求虽然与播放无关，但直接取消会触发官网未捕获的 Promise/CORS 错误，因此不作为默认优化。命中统计会以 `Resource filter blocked ...` 输出到 `WebTvLive` 日志。
 
-### 侧边频道菜单（M1 首版）
+### 侧边频道菜单
 
 - 确定键呼出，贴屏幕左侧显示，**不遮住右侧视频、视频继续播放**（菜单只是浮层，不碰 GeckoView）。
-- 左区=分类列表（当前为 `CCTV`、`卫视`），右区=该分类下频道列表，均垂直滚动。
+- 左区=分类列表（当前为 `CCTV`、`卫视`），中区=该分类下频道列表，右区=当前高亮频道的当天节目单，均垂直滚动。
+- 节目单按频道懒加载：遥控器在频道上停稳后才请求央视频公开 EPG 接口；优先展示当天的内存/磁盘缓存，缓存较旧时再后台刷新。当前节目高亮并自动滚入可见区域，日期变化后自动切换当天缓存键。
 - 数据源在 `TvCatalog.kt`：`Category(name, channels)` 列表 + 拉平的 `flatChannels`（供上/下换台与「上次频道下标」历史兼容）。`Channel.siteName` 必须与央视频页面频道名完全一致。
-- 菜单导航**不走系统焦点**（方向键被 `dispatchKeyEvent` 提前吞掉，进不了 RecyclerView）：`MenuAdapter` 按外部下标渲染高亮——活动列选中行=高亮蓝（`activated`），非活动列选中行=暗选中态（`selected`）。
+- 菜单导航**不走系统焦点**（方向键被 `dispatchKeyEvent` 提前吞掉，进不了 RecyclerView）：适配器按外部下标渲染高亮——活动列选中行=高亮蓝（`activated`），非活动列选中行=暗选中态（`selected`）。
 - 打开菜单会把左右两列定位到「当前正在播放的频道」；左列上下移动即实时预览右列频道（不加载、不切台），在频道列按确定才真正 `loadCurrentChannel`。
-- 调试按键：`adb ... input keyevent 23`=确定（开菜单/选中），`21`/`22`=左/右切列，`19`/`20`=上/下移动，`4`=返回（关菜单）。
+- 调试按键：`adb ... input keyevent 23`=确定（开菜单/选中频道），`21`/`22`=在分类、频道、节目单三列间移动，`19`/`20`=当前列上/下移动，`4`=返回（关菜单）。
 
 ### 右侧系统设置面板
 
