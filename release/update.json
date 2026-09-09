@@ -1,28 +1,28 @@
 {
   "schemaVersion": 1,
-  "versionCode": 3,
-  "versionName": "0.0.3",
-  "releaseNotes": "# WebTvLive 0.0.3\n\n本版本新增应用内自动更新能力，正式安装包统一通过 Gitee Release 分发。\n\n## 更新内容\n\n- 每次启动自动检查新版本；没有更新或检查失败时不打扰播放。\n- 系统设置新增“检查更新”，可随时手动检查。\n- 发现新版本时展示更新说明，支持“跳过此版本”或后台下载更新。\n- 自动匹配当前 GeckoView / WebView 内核及 32 位 / 64 位架构安装包。\n- 下载完成后校验文件大小、SHA-256、包名、版本号和签名，再启动系统安装器。\n- 支持下载任务恢复与未知来源安装授权引导。\n\n## APK 选择\n\n- 老电视或系统 WebView 较旧：优先安装 GeckoView 对应架构 APK。\n- 新系统或希望小包体：优先安装 WebView 对应架构 APK。\n- arm64-v8a 适用于 64 位 ARM 设备，armeabi-v7a 适用于 32 位 ARM 设备。\n\n## 合规说明\n\nWebTvLive 只嵌套展示电视台官网公开直播网页，不采集、不存储、不转发视频流，不破解登录、付费或清晰度限制。",
+  "versionCode": 4,
+  "versionName": "0.0.4",
+  "releaseNotes": "# WebTvLive 0.0.4\n\n本版本新增频道节目单，并进一步完善调试版与正式版的构建隔离和发布校验。\n\n## 更新内容\n\n- 频道菜单新增当天节目单，支持按频道懒加载并缓存节目数据。\n- 当前节目自动高亮并滚动到可见位置，跨日期后自动切换当天数据。\n- 调试版与正式版可同时安装，调试版不会触发应用内更新。\n- 强化正式版签名配置检查，降低误发布未签名安装包的风险。\n\n## APK 选择\n\n- 老电视或系统 WebView 较旧：优先安装 GeckoView 对应架构 APK。\n- 新系统或希望小包体：优先安装 WebView 对应架构 APK。\n- arm64-v8a 适用于 64 位 ARM 设备，armeabi-v7a 适用于 32 位 ARM 设备。\n\n## 合规说明\n\nWebTvLive 只嵌套展示电视台官网公开直播网页，不采集、不存储、不转发视频流，不破解登录、付费或清晰度限制。",
   "assets": {
     "gecko-arm64-v8a": {
-      "url": "https://gitee.com/lipengzhou/WebTvLive/releases/download/v0.0.3/app-gecko-arm64-v8a-release.apk",
-      "sizeBytes": 95304008,
-      "sha256": "bb8e4952409ab16c35b27824d427a9ee6f58de504eafe4f4c6def8815bdcf27b"
+      "url": "https://gitee.com/lipengzhou/WebTvLive/releases/download/v0.0.4/app-gecko-arm64-v8a-release.apk",
+      "sizeBytes": 95324204,
+      "sha256": "e87ff2c4fdf2e06d9e649185ce17e49896b9db9ec335a4f068c65788327e7b19"
     },
     "gecko-armeabi-v7a": {
-      "url": "https://gitee.com/lipengzhou/WebTvLive/releases/download/v0.0.3/app-gecko-armeabi-v7a-release.apk",
-      "sizeBytes": 92657098,
-      "sha256": "37d38bcc5dbe27e63c9e938a965e1802ead11bb339df8ebddee8438a9ce8d54d"
+      "url": "https://gitee.com/lipengzhou/WebTvLive/releases/download/v0.0.4/app-gecko-armeabi-v7a-release.apk",
+      "sizeBytes": 92677294,
+      "sha256": "0fd69dda4fd64293c607f83572b9c3bd3f2abef5e8ed8772788fe878245aae62"
     },
     "webview-arm64-v8a": {
-      "url": "https://gitee.com/lipengzhou/WebTvLive/releases/download/v0.0.3/app-webview-arm64-v8a-release.apk",
-      "sizeBytes": 2346897,
-      "sha256": "f737bad22955bd3fc2b2bb552aecce4ce4690400cdf49ca9fc524c1dea35a2f2"
+      "url": "https://gitee.com/lipengzhou/WebTvLive/releases/download/v0.0.4/app-webview-arm64-v8a-release.apk",
+      "sizeBytes": 2373081,
+      "sha256": "78380b9db63f350fee17deb9ef5d766cf7f722b09e947523ecea8fc2ba52ca26"
     },
     "webview-armeabi-v7a": {
-      "url": "https://gitee.com/lipengzhou/WebTvLive/releases/download/v0.0.3/app-webview-armeabi-v7a-release.apk",
-      "sizeBytes": 2346897,
-      "sha256": "f737bad22955bd3fc2b2bb552aecce4ce4690400cdf49ca9fc524c1dea35a2f2"
+      "url": "https://gitee.com/lipengzhou/WebTvLive/releases/download/v0.0.4/app-webview-armeabi-v7a-release.apk",
+      "sizeBytes": 2373081,
+      "sha256": "78380b9db63f350fee17deb9ef5d766cf7f722b09e947523ecea8fc2ba52ca26"
     }
   }
 }
