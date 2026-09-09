@@ -14,16 +14,44 @@ fun releaseProperty(name: String): String? =
         ?: providers.gradleProperty(name).orNull
         ?: localProperties.getProperty(name)
 
-val releaseStoreFilePath = releaseProperty("WEBTVLIVE_RELEASE_STORE_FILE")
-val releaseStorePassword = releaseProperty("WEBTVLIVE_RELEASE_STORE_PASSWORD")
-val releaseKeyAlias = releaseProperty("WEBTVLIVE_RELEASE_KEY_ALIAS")
-val releaseKeyPassword = releaseProperty("WEBTVLIVE_RELEASE_KEY_PASSWORD")
-val hasReleaseSigning = listOf(
-    releaseStoreFilePath,
-    releaseStorePassword,
-    releaseKeyAlias,
-    releaseKeyPassword,
-).all { !it.isNullOrBlank() }
+val releaseSigningPropertyNames = listOf(
+    "WEBTVLIVE_RELEASE_STORE_FILE",
+    "WEBTVLIVE_RELEASE_STORE_PASSWORD",
+    "WEBTVLIVE_RELEASE_KEY_ALIAS",
+    "WEBTVLIVE_RELEASE_KEY_PASSWORD",
+)
+val releaseSigningProperties = releaseSigningPropertyNames.associateWith(::releaseProperty)
+val missingReleaseSigningProperties = releaseSigningProperties
+    .filterValues { it.isNullOrBlank() }
+    .keys
+
+fun requestsReleaseArtifact(taskPath: String): Boolean {
+    val taskName = taskPath.substringAfterLast(':').lowercase()
+    if (taskName in setOf("assemble", "build", "bundle", "publish")) return true
+    if ("release" !in taskName) return false
+    return listOf("assemble", "bundle", "install", "package", "publish")
+        .any(taskName::startsWith)
+}
+
+val releaseArtifactRequested = gradle.startParameter.taskNames.any(::requestsReleaseArtifact)
+if (releaseArtifactRequested && missingReleaseSigningProperties.isNotEmpty()) {
+    throw GradleException(
+        "正式构建缺少签名配置：${missingReleaseSigningProperties.joinToString()}。" +
+            "请通过环境变量、Gradle property 或 local.properties 配置后重试。",
+    )
+}
+
+val releaseStoreFilePath = releaseSigningProperties.getValue("WEBTVLIVE_RELEASE_STORE_FILE")
+val releaseStorePassword = releaseSigningProperties.getValue("WEBTVLIVE_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = releaseSigningProperties.getValue("WEBTVLIVE_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = releaseSigningProperties.getValue("WEBTVLIVE_RELEASE_KEY_PASSWORD")
+val hasReleaseSigning = missingReleaseSigningProperties.isEmpty()
+
+if (releaseArtifactRequested && hasReleaseSigning && !file(releaseStoreFilePath!!).isFile) {
+    throw GradleException(
+        "正式构建签名文件不存在：WEBTVLIVE_RELEASE_STORE_FILE=$releaseStoreFilePath",
+    )
+}
 
 android {
     namespace = "com.lipengzhou.webtvlive"

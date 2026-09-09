@@ -39,6 +39,9 @@ while IFS= read -r json_file; do
   jq empty "$json_file"
 done < <(find "$ROOT_DIR/app/src" -type f -name '*.json' -print)
 
+echo "==> 验证正式构建签名门禁"
+"$ROOT_DIR/scripts/verify-release-signing.sh"
+
 echo "==> 运行双内核单元测试、Lint 和 Debug 构建"
 cd "$ROOT_DIR"
 ./gradlew \
