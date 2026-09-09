@@ -170,6 +170,10 @@ class MainActivity : AppCompatActivity() {
         ABOUT(R.string.setting_about),
     }
 
+    private val availableSettingsItems = SettingsItem.entries.filter { item ->
+        BuildConfig.APP_UPDATES_ENABLED || item != SettingsItem.CHECK_UPDATE
+    }
+
     companion object {
         private const val BACK_EXIT_INTERVAL = 2000L
         private const val CHANNEL_NAME_SHOW_MS = 3000L
@@ -232,6 +236,7 @@ class MainActivity : AppCompatActivity() {
     private val downloadCompleteReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
+            if (!::updateManager.isInitialized) return
             val downloadId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
             updateManager.handleDownloadComplete(downloadId, ::handlePendingDownload)
         }
@@ -242,13 +247,17 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-        updateManager = AppUpdateManager(this)
-        ContextCompat.registerReceiver(
-            this,
-            downloadCompleteReceiver,
-            IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
-            ContextCompat.RECEIVER_EXPORTED,
-        )
+        if (BuildConfig.APP_UPDATES_ENABLED) {
+            updateManager = AppUpdateManager(this)
+            ContextCompat.registerReceiver(
+                this,
+                downloadCompleteReceiver,
+                IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+                ContextCompat.RECEIVER_EXPORTED,
+            )
+        } else {
+            Log.i(TAG, "App updates disabled for ${BuildConfig.BUILD_TYPE} build")
+        }
 
         enableImmersiveFullscreen()
         keepScreenOn()
@@ -262,7 +271,9 @@ class MainActivity : AppCompatActivity() {
         playbackBrightness?.let { applyPlaybackBrightness(it) }
         Log.i(TAG, "StartupTiming: activity_ready elapsed=${startupElapsed()}ms")
         createAndAttachBrowserEngine()
-        uiHandler.postDelayed(automaticUpdateCheckRunnable, AUTOMATIC_UPDATE_CHECK_DELAY_MS)
+        if (BuildConfig.APP_UPDATES_ENABLED) {
+            uiHandler.postDelayed(automaticUpdateCheckRunnable, AUTOMATIC_UPDATE_CHECK_DELAY_MS)
+        }
     }
 
     // region 浏览器内核
@@ -1239,7 +1250,7 @@ class MainActivity : AppCompatActivity() {
         binding.settingsValueList.adapter = settingsValueAdapter
         binding.settingsValueList.itemAnimator = null
         settingsCategoryAdapter.submit(
-            SettingsItem.entries.map { getString(it.titleRes) },
+            availableSettingsItems.map { getString(it.titleRes) },
             keepIndex = 0,
         )
     }
@@ -1313,7 +1324,7 @@ class MainActivity : AppCompatActivity() {
     private fun moveSettingsSelection(delta: Int): Boolean {
         if (settingsActiveColumn == COLUMN_SETTING_CATEGORY) {
             val next = (settingsCategoryAdapter.selectedIndex + delta)
-                .coerceIn(0, SettingsItem.entries.lastIndex)
+                .coerceIn(0, availableSettingsItems.lastIndex)
             if (next == settingsCategoryAdapter.selectedIndex) return false
             settingsCategoryAdapter.setSelected(next)
             binding.settingsCategoryList.scrollToPosition(next)
@@ -1395,7 +1406,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun selectedSettingsItem(): SettingsItem =
-        SettingsItem.entries.getOrElse(settingsCategoryAdapter.selectedIndex) {
+        availableSettingsItems.getOrElse(settingsCategoryAdapter.selectedIndex) {
             SettingsItem.VIDEO_ENHANCEMENT
         }
 
@@ -1467,6 +1478,7 @@ class MainActivity : AppCompatActivity() {
 
     // region 应用更新
     private fun startAutomaticUpdateCheck() {
+        if (!BuildConfig.APP_UPDATES_ENABLED) return
         if (automaticUpdateCheckStarted || isFinishing || isDestroyed) return
         automaticUpdateCheckStarted = true
         uiHandler.removeCallbacks(automaticUpdateCheckRunnable)
@@ -1505,6 +1517,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun performManualUpdateCheck() {
+        if (!BuildConfig.APP_UPDATES_ENABLED) return
         if (updateCheckInProgress) {
             if (!activeUpdateCheckIsManual) manualUpdateCheckQueued = true
             Toast.makeText(this, R.string.update_checking, Toast.LENGTH_SHORT).show()

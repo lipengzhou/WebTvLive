@@ -54,7 +54,13 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+            buildConfigField("boolean", "APP_UPDATES_ENABLED", "false")
+        }
         release {
+            buildConfigField("boolean", "APP_UPDATES_ENABLED", "true")
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }

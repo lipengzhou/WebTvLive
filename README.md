@@ -15,7 +15,7 @@ WebTvLive 是一款面向 Android TV 和触屏设备的全屏直播电视 App。
 - 系统设置面板：右侧设置面板，当前支持画质增强档位。
 - 播放恢复：换台后等待真实 `playing` 事件再隐藏加载遮罩，超时后自动重试或回退到稳定频道。
 - 画质增强：支持原始、轻度增强、标准增强、强力增强四档。
-- 自动更新：启动时静默检查 Gitee 更新，按当前内核和 CPU 架构下载对应正式包。
+- 自动更新：Release 启动时静默检查 Gitee 更新，按当前内核和 CPU 架构下载对应正式包；Debug 关闭更新。
 - 触屏调节：左半屏滑动调应用内亮度，右半屏滑动调系统媒体音量。
 
 ## 触屏操作
@@ -76,7 +76,7 @@ WebTvLive 是一款面向 Android TV 和触屏设备的全屏直播电视 App。
 | 确定 | 应用当前档位 |
 | 返回 / 菜单键 | 关闭系统设置 |
 
-“检查更新”设置项支持手动检查。发现新版时会展示更新说明，可选择跳过该版本或后台下载；下载完成并校验文件、版本和签名后，会打开系统安装器。Android 首次侧载更新时需要用户允许本应用安装未知来源应用。
+Release 的“检查更新”设置项支持手动检查。发现新版时会展示更新说明，可选择跳过该版本或后台下载；下载完成并校验文件、版本和签名后，会打开系统安装器。Android 首次侧载更新时需要用户允许本应用安装未知来源应用。Debug 不显示该设置项。
 
 ## 技术架构
 
@@ -121,6 +121,17 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 | targetSdk | 37 |
 | compileSdk | 37 |
 | GeckoView | 153.0 |
+
+Debug 与 Release 使用不同的安装身份，可以在同一设备并存：
+
+| 构建类型 | 应用名 | 应用 ID | 应用内更新 |
+| --- | --- | --- | --- |
+| Debug | 看电视 Debug | `com.lipengzhou.webtvlive.debug` | 关闭，不检查或下载正式更新 |
+| Release | 看电视 | `com.lipengzhou.webtvlive` | 启用 |
+
+Android 会按应用 ID 分配独立数据沙箱，因此两者的 SharedPreferences 和
+`Android/data/<应用 ID>/files/Download/updates` 下载目录互不影响。Debug 也不声明
+安装未知来源应用权限，正式版的频道、设置和更新下载状态不会被调试安装覆盖。
 
 ## 构建命令
 
@@ -210,7 +221,7 @@ adb -s emulator-5554 shell getprop ro.build.version.sdk
 
 ```bash
 adb -s emulator-5554 install -r app/build/outputs/apk/gecko/debug/app-gecko-arm64-v8a-debug.apk
-adb -s emulator-5554 shell monkey -p com.lipengzhou.webtvlive -c android.intent.category.LAUNCHER 1
+adb -s emulator-5554 shell monkey -p com.lipengzhou.webtvlive.debug -c android.intent.category.LAUNCHER 1
 ```
 
 确认 App 在前台：

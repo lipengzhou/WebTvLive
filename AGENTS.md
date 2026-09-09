@@ -44,6 +44,12 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 # 原生 WebView 64 位：app/build/outputs/apk/webview/release/app-webview-arm64-v8a-release.apk
 ```
 
+Debug 应用名为“看电视 Debug”，应用 ID 为
+`com.lipengzhou.webtvlive.debug`；Release 仍为“看电视”和
+`com.lipengzhou.webtvlive`。两者可同时安装，并由 Android 应用沙箱隔离
+SharedPreferences 与外部私有下载目录。Debug 不初始化应用内更新、不显示“检查更新”，
+也不声明安装未知来源应用权限。
+
 Release APK 启用 R8/资源优化，并通过 `useLegacyPackaging=true` 压缩 APK 内的 native
 `.so`；产物仍是可直接安装的标准 APK。Android 安装时会把 native 库解压到应用目录，
 所以安装后的磁盘占用会高于 APK 下载大小。Debug APK 保持默认的非压缩 native 库打包方式。
@@ -62,11 +68,11 @@ adb -s 127.0.0.1:5555 shell getprop ro.build.version.sdk       # -> 32
 adb -s 127.0.0.1:5555 install -r app/build/outputs/apk/webview/debug/app-webview-arm64-v8a-debug.apk
 
 # 2) 启动 app
-adb -s 127.0.0.1:5555 shell monkey -p com.lipengzhou.webtvlive -c android.intent.category.LAUNCHER 1
+adb -s 127.0.0.1:5555 shell monkey -p com.lipengzhou.webtvlive.debug -c android.intent.category.LAUNCHER 1
 
 # 3) 确认已在前台
 adb -s 127.0.0.1:5555 shell dumpsys activity activities | grep -i topResumedActivity
-#   期望包含 com.lipengzhou.webtvlive/.MainActivity
+#   期望包含 com.lipengzhou.webtvlive.debug/com.lipengzhou.webtvlive.MainActivity
 
 # 4) 模拟遥控器换台（对应 MainActivity 的按键映射）
 adb -s 127.0.0.1:5555 shell input keyevent 19    # DPAD_UP   = 下一个频道（cctv1 -> cctv2 …）
@@ -121,9 +127,9 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 - **左/右**（`DPAD_LEFT` / `DPAD_RIGHT`）：标准态屏蔽（防止 WebView 滚动页面/移焦点）；菜单态在「分类列 ↔ 频道列」间切换焦点。
 - **返回键**：菜单态=关闭菜单；标准态=2 秒内按两次退出。
 - **菜单键**（`MENU` / `SETTINGS` / `TV_CONTENTS_MENU`）：标准态=从右侧呼出系统设置；设置态=关闭设置；频道菜单态=切换到系统设置。
-- 每次冷启动在首帧播放后检查 Gitee 静态更新清单，15 秒未首播则按兜底定时触发；无新版和检查失败均不打扰播放。
+- Release 每次冷启动在首帧播放后检查 Gitee 静态更新清单，15 秒未首播则按兜底定时触发；无新版和检查失败均不打扰播放。Debug 不检查更新。
 - 新版提示支持“跳过此版本”和“更新”；返回键仅关闭本次提示。下载由系统 `DownloadManager` 在后台继续，完成后校验大小、SHA-256、包名、版本号和签名，再打开系统安装器。
-- 系统设置中的“检查更新”可手动检查，并且能够重新发现已跳过的版本。
+- Release 系统设置中的“检查更新”可手动检查，并且能够重新发现已跳过的版本；Debug 不显示该设置项。
 - 首次按最近成功频道的 `pid` 直达 `https://www.yangshipin.cn/tv/home?pid=...`；WebExtension 会核对页面实际选中频道，`pid` 失效时回退到按频道名点击。后续换台仍在当前页面按频道名点击并局部重建播放器。
 - 发出页内换台指令时立即显示全屏加载遮罩；WebExtension 必须确认央视频已替换旧 `<video>`，或复用的 `<video>` 触发了新一轮 `playing`，才发送带本次请求 ID 的 `playing` 隐藏遮罩，不能让旧频道或过期请求提前解除遮罩。
 - 每次播放器节点创建或换台重建后，WebExtension 会解除静音并持续把 `<video>.volume` 设为 `1`；不主动切换清晰度，使用官网默认/自适应策略。
