@@ -1,8 +1,13 @@
+import com.android.build.api.variant.FilterConfiguration
 import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
 }
+
+// 版本号在此集中定义，供 defaultConfig 与产物命名共用，保证 APK 文件名里的版本与内置版本一致。
+val webtvliveVersionCode = 6
+val webtvliveVersionName = "0.0.6"
 
 val localProperties = Properties().apply {
     val file = rootProject.file("local.properties")
@@ -63,8 +68,8 @@ android {
         applicationId = "com.lipengzhou.webtvlive"
         minSdk = 28
         targetSdk = 37
-        versionCode = 5
-        versionName = "0.0.5"
+        versionCode = webtvliveVersionCode
+        versionName = webtvliveVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -148,6 +153,21 @@ android {
 androidComponents {
     onVariants(selector().withBuildType("release")) { variant ->
         variant.packaging.jniLibs.useLegacyPackaging.set(true)
+    }
+    // 统一产物命名为 webtvlive-<flavor>-<version>-<abi>-<buildType>.apk，
+    // 让下载后的安装包不看目录也能一眼分辨内核、版本、架构和构建类型（debug/release 均生效）。
+    onVariants { variant ->
+        val flavor = variant.flavorName ?: return@onVariants
+        val buildType = variant.buildType ?: return@onVariants
+        for (output in variant.outputs) {
+            val abi = output.filters
+                .firstOrNull { it.filterType == FilterConfiguration.FilterType.ABI }
+                ?.identifier
+                ?: continue
+            output.outputFileName.set(
+                "webtvlive-$flavor-$webtvliveVersionName-$abi-$buildType.apk",
+            )
+        }
     }
 }
 

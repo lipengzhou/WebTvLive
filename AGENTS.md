@@ -60,7 +60,7 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 # 打包（按 内核 flavor × ABI 分包，无 universal APK）
 ./gradlew :app:assembleDebug -q      # 本地/模拟器调试用
 ./gradlew :app:assembleRelease -q    # 正式分发用，需先配置签名（见发版）
-# 产物：app/build/outputs/apk/{gecko,webview}/{debug,release}/app-{flavor}-{abi}-{type}.apk
+# 产物：app/build/outputs/apk/{gecko,webview}/{debug,release}/webtvlive-{flavor}-{version}-{abi}-{type}.apk
 ```
 
 `verify.sh` 是本地、CI（`.github/workflows/ci.yml`）和发版脚本的统一入口。**不要**另拼一套 Gradle 校验任务；要加检查就加进 `verify.sh`。注意它**不跑** androidTest（`MainActivitySmokeTest` 需手动/真机验证）。
@@ -70,7 +70,7 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 模拟器无实体遥控器，用 `adb ... input keyevent` 触发 `MainActivity.dispatchKeyEvent`。**多设备必须带 `-s <serial>`。** 完整 adb 触屏/按键清单见 `README.md`，最小验证环：
 
 ```bash
-adb -s <serial> install -r app/build/outputs/apk/webview/debug/app-webview-arm64-v8a-debug.apk
+adb -s <serial> install -r app/build/outputs/apk/webview/debug/webtvlive-webview-0.0.6-arm64-v8a-debug.apk
 adb -s <serial> shell monkey -p com.lipengzhou.webtvlive.debug -c android.intent.category.LAUNCHER 1
 adb -s <serial> shell input keyevent 19   # 19/20=换台 23=开菜单/确定 82=设置 4=返回(2s内两次退出)
 adb -s <serial> exec-out screencap -p > /tmp/webtv.png   # 换台时左上角有频道名浮层可核对

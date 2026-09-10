@@ -81,13 +81,13 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 
 ```bash
 ./gradlew :app:assembleDebug -q
-# app/build/outputs/apk/{gecko,webview}/debug/app-{flavor}-{abi}-debug.apk
+# app/build/outputs/apk/{gecko,webview}/debug/webtvlive-{flavor}-{version}-{abi}-debug.apk
 ```
 
 在模拟器/真机上运行（多设备用 `-s <serial>` 指定；模拟器用 `input keyevent` 等效遥控器）：
 
 ```bash
-adb -s <serial> install -r app/build/outputs/apk/gecko/debug/app-gecko-arm64-v8a-debug.apk
+adb -s <serial> install -r app/build/outputs/apk/gecko/debug/webtvlive-gecko-0.0.6-arm64-v8a-debug.apk
 adb -s <serial> shell monkey -p com.lipengzhou.webtvlive.debug -c android.intent.category.LAUNCHER 1
 adb -s <serial> shell input keyevent 19   # 19/20 换台，23 开菜单/确定，82 设置，4 返回
 ```

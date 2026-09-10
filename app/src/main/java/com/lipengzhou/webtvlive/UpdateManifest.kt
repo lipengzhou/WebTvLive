@@ -95,7 +95,10 @@ object UpdateManifestParser {
         val uri = runCatching { URI(url) }.getOrElse {
             throw IllegalArgumentException("$channel 的下载地址无效", it)
         }
-        val expectedFileName = "app-$channel-release.apk"
+        // channel 形如 "gecko-arm64-v8a"：首段是内核，其余是 ABI。
+        val engine = channel.substringBefore('-')
+        val abi = channel.substringAfter('-')
+        val expectedFileName = "webtvlive-$engine-$versionName-$abi-release.apk"
         val expectedPath = "${RELEASE_PATH_PREFIX}v$versionName/$expectedFileName"
         require(
             uri.scheme == "https" && uri.host == RELEASE_HOST &&

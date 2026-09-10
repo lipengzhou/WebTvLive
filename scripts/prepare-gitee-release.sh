@@ -26,10 +26,23 @@ latest_build_tool() {
   find "$sdk_root/build-tools" -type f -name "$tool" 2>/dev/null | sort -V | tail -1
 }
 
+# channel 形如 "gecko-arm64-v8a"：首段是内核，其余是 ABI。
+channel_engine() { echo "${1%%-*}"; }
+channel_abi() { echo "${1#*-}"; }
+
+# 正式包命名统一为 webtvlive-<engine>-<version>-<abi>-release.apk。
+apk_file_name() {
+  local channel=$1 version=$2
+  echo "webtvlive-$(channel_engine "$channel")-$version-$(channel_abi "$channel")-release.apk"
+}
+
+gradle_version_name() {
+  sed -n 's/^val webtvliveVersionName = "\(.*\)"$/\1/p' "$ROOT_DIR/app/build.gradle.kts" | head -1
+}
+
 apk_path() {
-  local channel=$1
-  local engine=${channel%%-*}
-  echo "$ROOT_DIR/app/build/outputs/apk/$engine/release/app-$channel-release.apk"
+  local channel=$1 version=$2
+  echo "$ROOT_DIR/app/build/outputs/apk/$(channel_engine "$channel")/release/$(apk_file_name "$channel" "$version")"
 }
 
 verify_remote() {
@@ -58,7 +71,7 @@ verify_remote() {
   for channel in "${CHANNELS[@]}"; do
     local expected_url url expected_size expected_sha apk actual_size actual_sha
     local badging apk_package apk_version_code apk_version_name engine base_version_name apk_certificate
-    expected_url="$GITEE_RELEASE_BASE/v$version_name/app-$channel-release.apk"
+    expected_url="$GITEE_RELEASE_BASE/v$version_name/$(apk_file_name "$channel" "$version_name")"
     url=$(jq -r --arg channel "$channel" '.assets[$channel].url' "$MANIFEST_PATH")
     [[ "$url" == "$expected_url" ]] || {
       echo "$channel 的 URL 不符合 Gitee Release 规则" >&2
@@ -66,7 +79,7 @@ verify_remote() {
     }
     expected_size=$(jq -r --arg channel "$channel" '.assets[$channel].sizeBytes' "$MANIFEST_PATH")
     expected_sha=$(jq -r --arg channel "$channel" '.assets[$channel].sha256' "$MANIFEST_PATH")
-    apk="$temp_dir/app-$channel-release.apk"
+    apk="$temp_dir/$(apk_file_name "$channel" "$version_name")"
     curl --fail --silent --show-error --location --max-redirs 5 --output "$apk" "$url"
     actual_size=$(wc -c < "$apk" | tr -d ' ')
     actual_sha=$(shasum -a 256 "$apk" | awk '{print $1}')
@@ -81,7 +94,7 @@ verify_remote() {
     apk_package=$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$badging")
     apk_version_code=$(sed -n "s/.*versionCode='\([^']*\)'.*/\1/p" <<<"$badging")
     apk_version_name=$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" <<<"$badging")
-    engine=${channel%%-*}
+    engine=$(channel_engine "$channel")
     base_version_name=${apk_version_name%-$engine}
     [[ "$apk_package" == "com.lipengzhou.webtvlive" ]] || {
       echo "$channel 的远端 APK 包名无效：$apk_package" >&2; exit 1
@@ -132,23 +145,30 @@ cd "$ROOT_DIR"
 ./scripts/verify.sh
 ./gradlew :app:assembleRelease -q
 
+GRADLE_VERSION_NAME=$(gradle_version_name)
+[[ -n "$GRADLE_VERSION_NAME" ]] || { echo "无法从 build.gradle.kts 解析 versionName" >&2; exit 1; }
+
 VERSION_CODE=""
 VERSION_NAME=""
 CERTIFICATE_DIGEST=""
 ASSETS_JSON='{}'
 
 for channel in "${CHANNELS[@]}"; do
-  apk=$(apk_path "$channel")
+  apk=$(apk_path "$channel" "$GRADLE_VERSION_NAME")
   [[ -f "$apk" ]] || { echo "缺少 APK：$apk" >&2; exit 1; }
 
   badging=$("$AAPT" dump badging "$apk" | sed -n '1p')
   apk_package=$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$badging")
   apk_version_code=$(sed -n "s/.*versionCode='\([^']*\)'.*/\1/p" <<<"$badging")
   apk_version_name=$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" <<<"$badging")
-  engine=${channel%%-*}
+  engine=$(channel_engine "$channel")
   base_version_name=${apk_version_name%-$engine}
   [[ "$apk_version_name" == "$base_version_name-$engine" ]] || {
     echo "$channel 的 versionName 与 flavor 不匹配：$apk_version_name" >&2
+    exit 1
+  }
+  [[ "$base_version_name" == "$GRADLE_VERSION_NAME" ]] || {
+    echo "$channel 的 APK 版本与 build.gradle.kts 不一致：$base_version_name" >&2
     exit 1
   }
   [[ "$apk_package" == "com.lipengzhou.webtvlive" ]] || {
@@ -177,7 +197,7 @@ for channel in "${CHANNELS[@]}"; do
 
   size_bytes=$(wc -c < "$apk" | tr -d ' ')
   sha256=$(shasum -a 256 "$apk" | awk '{print $1}')
-  url="$GITEE_RELEASE_BASE/v$VERSION_NAME/app-$channel-release.apk"
+  url="$GITEE_RELEASE_BASE/v$VERSION_NAME/$(apk_file_name "$channel" "$VERSION_NAME")"
   ASSETS_JSON=$(jq -c \
     --arg channel "$channel" \
     --arg url "$url" \

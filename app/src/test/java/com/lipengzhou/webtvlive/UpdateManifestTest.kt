@@ -16,7 +16,7 @@ class UpdateManifestTest {
         assertEquals("0.0.3", manifest.versionName)
         assertNotNull(manifest.assetFor("gecko", "arm64-v8a"))
         assertEquals(
-            "app-webview-armeabi-v7a-release.apk",
+            "webtvlive-webview-0.0.3-armeabi-v7a-release.apk",
             manifest.assetFor("webview", "armeabi-v7a")?.fileName,
         )
     }
@@ -36,8 +36,8 @@ class UpdateManifestTest {
     @Test
     fun parseRejectsUnexpectedReleasePath() {
         val json = validManifest().replace(
-            "/releases/download/v0.0.3/app-gecko-arm64-v8a-release.apk",
-            "/releases/download/v0.0.2/app-gecko-arm64-v8a-release.apk",
+            "/releases/download/v0.0.3/webtvlive-gecko-0.0.3-arm64-v8a-release.apk",
+            "/releases/download/v0.0.2/webtvlive-gecko-0.0.3-arm64-v8a-release.apk",
         )
 
         assertThrows(IllegalArgumentException::class.java) {
@@ -102,13 +102,18 @@ class UpdateManifestTest {
 
     private fun validManifest(): String {
         val hash = "a".repeat(64)
-        fun asset(channel: String) = """
-            "$channel": {
-              "url": "https://gitee.com/lipengzhou/WebTvLive/releases/download/v0.0.3/app-$channel-release.apk",
-              "sizeBytes": 1234,
-              "sha256": "$hash"
-            }
-        """.trimIndent()
+        fun asset(channel: String): String {
+            val engine = channel.substringBefore('-')
+            val abi = channel.substringAfter('-')
+            val fileName = "webtvlive-$engine-0.0.3-$abi-release.apk"
+            return """
+                "$channel": {
+                  "url": "https://gitee.com/lipengzhou/WebTvLive/releases/download/v0.0.3/$fileName",
+                  "sizeBytes": 1234,
+                  "sha256": "$hash"
+                }
+            """.trimIndent()
+        }
         return """
             {
               "schemaVersion": 1,

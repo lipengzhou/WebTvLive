@@ -18,7 +18,7 @@ description: 构建、验签、提交、打标签，并将 WebTvLive Android 正
 
 ## 构建与准备
 
-1. 修改 `app/build.gradle.kts` 中的 `versionCode` 和基础 `versionName`。不要手工添加 flavor 后缀；Gradle 会自动添加 `-gecko` 和 `-webview`。
+1. 修改 `app/build.gradle.kts` 顶部的 `webtvliveVersionCode` 和 `webtvliveVersionName` 常量（`defaultConfig` 与产物命名共用这两个值）。不要手工添加 flavor 后缀；Gradle 会自动添加 `-gecko` 和 `-webview`。产物文件名固定为 `webtvlive-<flavor>-<version>-<abi>-<buildType>.apk`。
 2. 使用 Android Studio JBR。仓库唯一质量门禁是 `scripts/verify.sh`，不得另行拼装一套 Gradle 校验任务；下一步的发布准备脚本会先调用该门禁：
 
 ```bash
@@ -31,12 +31,12 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ./scripts/prepare-gitee-release.sh --notes <发布说明文件>
 ```
 
-该命令必须生成 `release/update.json`，并验证以下四个签名 APK：
+该命令必须生成 `release/update.json`，并验证以下四个签名 APK（`<version>` 为本次发布版本，如 `0.0.6`）：
 
-- `app-gecko-arm64-v8a-release.apk`
-- `app-gecko-armeabi-v7a-release.apk`
-- `app-webview-arm64-v8a-release.apk`
-- `app-webview-armeabi-v7a-release.apk`
+- `webtvlive-gecko-<version>-arm64-v8a-release.apk`
+- `webtvlive-gecko-<version>-armeabi-v7a-release.apk`
+- `webtvlive-webview-<version>-arm64-v8a-release.apk`
+- `webtvlive-webview-<version>-armeabi-v7a-release.apk`
 
 4. 确认清单版本与 Gradle 一致，所有资源 URL 均位于 `https://gitee.com/lipengzhou/WebTvLive/releases/download/v<version>/`。确认四个本地 APK 的文件大小和 SHA-256 与清单一致。
 
