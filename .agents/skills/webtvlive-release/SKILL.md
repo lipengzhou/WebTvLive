@@ -42,7 +42,7 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 
 ## 提交并暂存发布状态
 
-1. 只暂存本次发版文件，执行 `git diff --cached --check`，使用 `Release 0.0.4` 这类简短提交信息。如果拆分清单提交能明显提高安全性或可读性，可额外使用 `Publish 0.0.4 update manifest`。
+1. 只暂存本次发版文件，执行 `git diff --cached --check`，使用 `Release <version>` 这类简短提交信息。如果拆分清单提交能明显提高安全性或可读性，可额外使用 `Publish <version> update manifest`。
 2. 在包含最终更新清单的提交上创建附注标签 `v<version>`。不得移动已经发布到远端的发版标签。
 3. 此时两个远端的 `main` 都应保持旧版本，只先将新标签推送到 Gitee 和 GitHub。这样可以创建 Release，同时公开的 raw 更新清单仍指向旧版本。
 

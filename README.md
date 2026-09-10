@@ -1,55 +1,25 @@
 # WebTvLive
 
-WebTvLive 是一款面向 Android TV 和触屏设备的全屏直播电视 App。它不采集、不存储、不转发视频流，只在应用内打开电视台官方公开直播网页，并通过页面适配脚本把网页中的播放器铺满全屏，提供接近传统电视的换台体验。
+WebTvLive 是一款面向 Android TV 和触屏设备的全屏直播电视 App。它不采集、不存储、不转发视频流，只在应用内打开电视台官方公开直播网页，并把网页中的播放器铺满全屏，提供接近传统电视的换台体验。
 
-当前默认播放源来自央视频公开电视直播页，频道包括 CCTV 和主要卫视频道。
+当前默认播放源来自央视频公开电视直播页，频道包括 CCTV 和主要卫视。
 
 ## 功能特性
 
-- 双内核构建：
-  - `gecko` flavor：随 APK 分发 GeckoView，适合系统 WebView 较旧的电视设备。
-  - `webview` flavor：使用系统 WebView，APK 更小，适合较新的 Android 设备。
-- 全屏直播播放：沉浸式横屏、黑底播放、屏幕常亮。
-- 频道切换：支持遥控器、触屏控制层和快捷手势。
-- 频道菜单：左侧两列频道列表，按分类浏览并选择频道。
-- 系统设置面板：右侧设置面板，当前支持画质增强档位。
-- 播放恢复：换台后等待真实 `playing` 事件再隐藏加载遮罩，超时后自动重试或回退到稳定频道。
-- 画质增强：支持原始、轻度增强、标准增强、强力增强四档。
-- 自动更新：Release 启动时静默检查 Gitee 更新，按当前内核和 CPU 架构下载对应正式包；Debug 关闭更新。
+- 双内核构建：`gecko`（随 APK 分发 GeckoView，适合系统 WebView 较旧的电视）、`webview`（用系统 WebView，包更小，适合较新设备）。
+- 全屏直播：沉浸式横屏、黑底播放、屏幕常亮。
+- 多种换台方式：遥控器、底部触屏控制层、快捷手势。
+- 频道菜单：左侧按分类浏览频道，并显示当天节目单。
+- 系统设置面板：右侧面板，当前支持画质增强档位（原始 / 轻度 / 标准 / 强力）。
+- 稳健播放：换台后等真实 `playing` 事件再隐藏加载遮罩，超时自动重试或回退到稳定频道。
+- 自动更新：Release 启动时静默检查更新，按当前内核和 CPU 架构下载对应正式包；Debug 关闭更新。
 - 触屏调节：左半屏滑动调应用内亮度，右半屏滑动调系统媒体音量。
 
-## 触屏操作
+## 使用说明
 
-播放态：
+### 遥控器（播放态）
 
-| 操作 | 行为 |
-| --- | --- |
-| 单击屏幕 | 显示或隐藏底部触屏控制层 |
-| 左半屏快速双击 | 打开频道列表 |
-| 右半屏快速双击 | 打开系统设置 |
-| 左半屏上下滑 | 调整当前 App 内亮度 |
-| 右半屏上下滑 | 调整系统媒体音量 |
-| 屏幕中间区域上滑 | 切到下一个频道 |
-| 屏幕中间区域下滑 | 切到上一个频道 |
-
-底部触屏控制层：
-
-| 按钮 | 行为 |
-| --- | --- |
-| 频道列表 | 打开左侧频道列表 |
-| 系统设置 | 打开右侧系统设置面板 |
-| 退出 | 直接退出 App |
-
-面板行为：
-
-- 频道列表打开后，点击右侧视频空白区域可关闭。
-- 系统设置打开后，点击左侧视频空白区域可关闭。
-- 频道列表和系统设置面板无操作 12 秒后自动关闭。
-- 底部触屏控制层无操作 3 秒后自动隐藏。
-
-## 遥控器操作
-
-| 按键 | 播放态行为 |
+| 按键 | 行为 |
 | --- | --- |
 | `DPAD_UP` / `CHANNEL_UP` | 下一个频道，末尾循环回第一个 |
 | `DPAD_DOWN` / `CHANNEL_DOWN` | 上一个频道，开头循环到最后一个 |
@@ -58,255 +28,76 @@ WebTvLive 是一款面向 Android TV 和触屏设备的全屏直播电视 App。
 | `BACK` | 2 秒内按两次退出 |
 | `DPAD_LEFT` / `DPAD_RIGHT` | 播放态屏蔽，防止网页滚动或抢焦点 |
 
-频道列表打开后：
+频道列表打开后：上/下在当前列移动，左/右在分类列与频道列间切换，确定进入频道列并换台，返回关闭，菜单键切到系统设置。
 
-| 按键 | 行为 |
+系统设置打开后：上/下选择画质增强档位，确定应用，返回/菜单键关闭。
+
+### 触屏（播放态）
+
+| 操作 | 行为 |
 | --- | --- |
-| 上 / 下 | 在当前列移动选择 |
-| 左 / 右 | 在分类列和频道列之间切换 |
-| 确定 | 分类列进入频道列；频道列选中并换台 |
-| 返回 | 关闭频道列表 |
-| 菜单键 | 切换到系统设置 |
+| 单击屏幕 | 显示/隐藏底部触屏控制层 |
+| 左半屏快速双击 | 打开频道列表 |
+| 右半屏快速双击 | 打开系统设置 |
+| 左半屏上下滑 | 调整 App 内亮度 |
+| 右半屏上下滑 | 调整系统媒体音量 |
+| 屏幕中间上滑 / 下滑 | 切到下一个 / 上一个频道 |
 
-系统设置打开后：
+底部控制层提供「频道列表 / 系统设置 / 退出」三个按钮。点击视频空白区可关闭已打开的面板；频道列表和设置面板无操作 12 秒后自动关闭，底部控制层无操作 3 秒后自动隐藏。
 
-| 按键 | 行为 |
+## 下载与安装
+
+正式版 APK 在两处 Release 同步发布，任选其一下载：
+
+- [Gitee Release](https://gitee.com/lipengzhou/WebTvLive/releases)（主发布源，应用内自动更新也从这里拉取）
+- [GitHub Release](https://github.com/lipengzhou/WebTvLive/releases)（镜像）
+
+按设备情况选择一个 APK 下载安装：
+
+| 选择 | 说明 |
 | --- | --- |
-| 上 / 下 | 选择画质增强档位 |
-| 确定 | 应用当前档位 |
-| 返回 / 菜单键 | 关闭系统设置 |
+| 内核 `gecko` | 系统 WebView 较旧的电视（如 Chromium 66 级别），兼容性更稳，包更大 |
+| 内核 `webview` | 较新的 Android 设备，复用系统 WebView，包更小 |
+| ABI `arm64-v8a` | 64 位设备 |
+| ABI `armeabi-v7a` | 32 位设备 |
 
-Release 的“检查更新”设置项支持手动检查。发现新版时会展示更新说明，可选择跳过该版本或后台下载；下载完成并校验文件、版本和签名后，会打开系统安装器。Android 首次侧载更新时需要用户允许本应用安装未知来源应用。Debug 不显示该设置项。
+安装后即可使用；Release 版会在后续启动时自动检查更新。首次通过应用内更新侧载新版本时，需允许本应用安装未知来源应用。
 
-## 技术架构
+## 开发指南
 
-核心思路：
-
-1. 原生 `MainActivity` 只负责生命周期、浏览器承载、播放 effect 执行和顶层输入路由。
-2. 浏览器内核通过 `BrowserEngine` 抽象隔离，分别由 GeckoView 和系统 WebView flavor 实现。
-3. `BrowserProtocol` 定义版本化原生/页面消息，两个内核共享同一编解码规则。
-4. 页面适配脚本 `player_adapter.js` 注入官网页面，负责查找 `<video>`、全屏铺满、换台和播放状态回传。
-5. `PlaybackCoordinator` 维护换台、超时、重试和回退状态；原生层收到播放成功事件后隐藏加载遮罩，并持久化最近成功频道。
-6. `ChannelMenuController`、`SettingsPanelController`、`PlaybackTouchController` 和
-   `AppUpdateController` 分别封装频道/节目单、系统设置、触屏交互和更新安装流程。
-
-关键文件：
-
-| 文件 | 说明 |
-| --- | --- |
-| `app/src/main/java/com/lipengzhou/webtvlive/MainActivity.kt` | 生命周期、浏览器承载、顶层输入路由与播放 effect 执行 |
-| `app/src/main/java/com/lipengzhou/webtvlive/BrowserEngine.kt` | 双内核共享接口 |
-| `app/src/main/java/com/lipengzhou/webtvlive/BrowserProtocol.kt` | 版本化原生/页面消息协议 |
-| `app/src/main/java/com/lipengzhou/webtvlive/PlaybackCoordinator.kt` | 播放请求、超时、重试和回退状态机 |
-| `app/src/main/java/com/lipengzhou/webtvlive/PanelCoordinator.kt` | 频道菜单与设置面板互斥状态 |
-| `app/src/main/java/com/lipengzhou/webtvlive/TouchGestureInterpreter.kt` | 可单元测试的触屏手势解释 |
-| `app/src/main/java/com/lipengzhou/webtvlive/ChannelMenuController.kt` | 频道分类、节目单加载和三列导航 |
-| `app/src/main/java/com/lipengzhou/webtvlive/SettingsPanelController.kt` | 设置渲染、持久化和遥控器导航 |
-| `app/src/main/java/com/lipengzhou/webtvlive/PlaybackTouchController.kt` | 触屏覆盖层、亮度/音量与单双击编排 |
-| `app/src/main/java/com/lipengzhou/webtvlive/AppUpdateController.kt` | 更新检查、下载恢复、校验和安装交互 |
-| `app/src/gecko/java/com/lipengzhou/webtvlive/FlavorBrowserEngine.kt` | GeckoView 内核实现 |
-| `app/src/webview/java/com/lipengzhou/webtvlive/FlavorBrowserEngine.kt` | 系统 WebView 内核实现 |
-| `app/src/main/assets/webextension/protocol.js` | 页面侧协议定义和命令校验 |
-| `app/src/main/assets/webextension/player_adapter.js` | 页面播放器适配脚本 |
-| `app/src/gecko/assets/webextension/request_filter.js` | GeckoView 请求过滤脚本 |
-| `app/src/main/java/com/lipengzhou/webtvlive/TvCatalog.kt` | 内置频道目录 |
-| `app/src/main/java/com/lipengzhou/webtvlive/VideoEnhancement.kt` | 画质增强档位 |
-| `app/src/main/res/layout/activity_main.xml` | 主界面布局 |
-
-## 构建环境
-
-建议在 macOS 上使用 Android Studio 自带 JBR：
+macOS 上建议用 Android Studio 内置 JBR 作 `JAVA_HOME`：
 
 ```bash
 export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ```
 
-源码的 Java/Kotlin 字节码目标为 17。仓库的 `gradle/gradle-daemon-jvm.properties`
-当前固定 Gradle Daemon 使用 Java 25；首次在新环境构建时，Foojay resolver 可能需要
-联网解析或下载匹配的 JDK。执行 `./gradlew -version` 可确认实际 Launcher/Daemon JVM。
-
-项目配置：
-
-| 项 | 值 |
-| --- | --- |
-| 语言 | Kotlin |
-| UI | 原生 XML View |
-| 构建 | Gradle Kotlin DSL + Version Catalog |
-| AGP | 9.3.2 |
-| minSdk | 28 |
-| targetSdk | 37 |
-| compileSdk | 37 |
-| GeckoView | 153.0 |
-
-Debug 与 Release 使用不同的安装身份，可以在同一设备并存：
-
-| 构建类型 | 应用名 | 应用 ID | 应用内更新 |
-| --- | --- | --- | --- |
-| Debug | 看电视 Debug | `com.lipengzhou.webtvlive.debug` | 关闭，不检查或下载正式更新 |
-| Release | 看电视 | `com.lipengzhou.webtvlive` | 启用 |
-
-Android 会按应用 ID 分配独立数据沙箱，因此两者的 SharedPreferences 和
-`Android/data/<应用 ID>/files/Download/updates` 下载目录互不影响。Debug 也不声明
-安装未知来源应用权限，正式版的频道、设置和更新下载状态不会被调试安装覆盖。
-
-## 构建命令
-
-快速编译 Kotlin：
-
-```bash
-./gradlew :app:compileGeckoDebugKotlin -q
-./gradlew :app:compileWebviewDebugKotlin -q
-```
-
-完整验证统一通过仓库质量门禁执行：
+统一质量门禁（Shell/JS/JSON 语法、双 flavor 单测与 Lint、四个 Debug APK、`git diff --check`）：
 
 ```bash
 ./scripts/verify.sh
 ```
 
-该脚本依次检查 Shell、JavaScript 和 JSON 语法，运行 Gecko/WebView 双 flavor
-单元测试与 Android Lint，构建四个 Debug APK，并执行 `git diff --check`。GitHub
-Actions 和正式发版脚本也调用同一入口。
-
-Debug APK 用于本地开发和模拟器调试，输出路径：
-
-```text
-app/build/outputs/apk/gecko/debug/app-gecko-arm64-v8a-debug.apk
-app/build/outputs/apk/gecko/debug/app-gecko-armeabi-v7a-debug.apk
-app/build/outputs/apk/webview/debug/app-webview-arm64-v8a-debug.apk
-app/build/outputs/apk/webview/debug/app-webview-armeabi-v7a-debug.apk
-```
-
-Release APK 用于 Gitee Release 和正式分发。签名信息从环境变量、Gradle property 或本地 `local.properties` 读取：
-
-```properties
-WEBTVLIVE_RELEASE_STORE_FILE=/absolute/path/to/webtvlive-release.jks
-WEBTVLIVE_RELEASE_STORE_PASSWORD=...
-WEBTVLIVE_RELEASE_KEY_ALIAS=webtvlive
-WEBTVLIVE_RELEASE_KEY_PASSWORD=...
-```
-
-如需单独在本地构建正式包，先执行 `./scripts/verify.sh`，再执行：
+打 Debug 包用于本地/模拟器调试，产物按 `内核 × ABI` 分包：
 
 ```bash
-./gradlew :app:assembleRelease -q
+./gradlew :app:assembleDebug -q
+# app/build/outputs/apk/{gecko,webview}/debug/app-{flavor}-{abi}-debug.apk
 ```
 
-`assembleRelease` 会同时开启 R8/资源优化，并压缩 APK 内的 native `.so`。输出文件仍是
-可直接安装的标准 APK，不需要用户解压；安装时 Android 会把 native 库解压到应用目录，
-因此安装后的磁盘占用会高于 APK 文件大小。
-
-Release APK 输出路径：
-
-```text
-app/build/outputs/apk/gecko/release/app-gecko-arm64-v8a-release.apk
-app/build/outputs/apk/gecko/release/app-gecko-armeabi-v7a-release.apk
-app/build/outputs/apk/webview/release/app-webview-arm64-v8a-release.apk
-app/build/outputs/apk/webview/release/app-webview-armeabi-v7a-release.apk
-```
-
-发版版本号使用 `0.0.x` 小版本递增策略；如无特殊说明，每次只递增最后一位 patch 号。例如 `0.0.1` 的下一版是 `0.0.2`。
-
-### Gitee Release 与更新清单
-
-App 从 `release/update.json` 检查版本，APK 下载地址固定使用 Gitee Release。发版时先准备一份纯文本更新说明，然后执行：
+在模拟器/真机上运行（多设备用 `-s <serial>` 指定；模拟器用 `input keyevent` 等效遥控器）：
 
 ```bash
-./scripts/prepare-gitee-release.sh --notes /path/to/release-notes.txt
+adb -s <serial> install -r app/build/outputs/apk/gecko/debug/app-gecko-arm64-v8a-debug.apk
+adb -s <serial> shell monkey -p com.lipengzhou.webtvlive.debug -c android.intent.category.LAUNCHER 1
+adb -s <serial> shell input keyevent 19   # 19/20 换台，23 开菜单/确定，82 设置，4 返回
 ```
 
-脚本会先调用统一质量门禁，再运行 release 构建，校验四个 APK 的版本、签名，计算文件大小与 SHA-256，并生成更新清单。随后在 Gitee 创建 `v<versionName>` Release，上传四个 APK；上传完成后执行：
+Debug 版应用名为「看电视 Debug」，与 Release 版沙箱隔离、可同时安装。
 
-```bash
-./scripts/prepare-gitee-release.sh --verify-remote
-```
-
-确认四条下载链接可访问后，再提交并推送 `release/update.json`。必须最后发布清单，避免客户端在 APK 上传完成前发现新版本。
-
-## 模拟器调试
-
-查看设备：
-
-```bash
-adb devices
-adb -s emulator-5554 shell getprop ro.product.cpu.abi
-adb -s emulator-5554 shell getprop ro.build.version.sdk
-```
-
-安装 GeckoView debug 版本并启动：
-
-```bash
-adb -s emulator-5554 install -r app/build/outputs/apk/gecko/debug/app-gecko-arm64-v8a-debug.apk
-adb -s emulator-5554 shell monkey -p com.lipengzhou.webtvlive.debug -c android.intent.category.LAUNCHER 1
-```
-
-确认 App 在前台：
-
-```bash
-adb -s emulator-5554 shell dumpsys activity activities | rg -i "topResumedActivity|mResumedActivity"
-```
-
-模拟遥控器：
-
-```bash
-adb -s emulator-5554 shell input keyevent 19  # 下一个频道
-adb -s emulator-5554 shell input keyevent 20  # 上一个频道
-adb -s emulator-5554 shell input keyevent 23  # 打开频道列表 / 确定
-adb -s emulator-5554 shell input keyevent 82  # 打开系统设置
-adb -s emulator-5554 shell input keyevent 4   # 返回
-```
-
-模拟触屏：
-
-```bash
-# 单击屏幕，显示底部触屏控制层
-adb -s emulator-5554 shell input tap 1280 720
-
-# 左半屏快速双击，打开频道列表
-adb -s emulator-5554 shell input tap 300 720
-adb -s emulator-5554 shell input tap 300 720
-
-# 右半屏快速双击，打开系统设置
-adb -s emulator-5554 shell input tap 2200 720
-adb -s emulator-5554 shell input tap 2200 720
-
-# 屏幕中间上滑/下滑，切换频道
-adb -s emulator-5554 shell input swipe 1280 1100 1280 250 650
-adb -s emulator-5554 shell input swipe 1280 250 1280 1100 650
-
-# 左半屏上下滑，调整 App 内亮度
-adb -s emulator-5554 shell input swipe 640 1100 640 250 650
-
-# 右半屏上下滑，调整系统媒体音量
-adb -s emulator-5554 shell input swipe 1920 250 1920 1100 650
-```
-
-抓取日志：
-
-```bash
-adb -s emulator-5554 logcat -c
-adb -s emulator-5554 logcat -d | rg "WebTvLive|Yangshipin|Gecko|MediaCodec"
-```
-
-截图：
-
-```bash
-adb -s emulator-5554 exec-out screencap -p > /tmp/webtvlive.png
-```
-
-## 真机注意事项
-
-- GeckoView 包体较大，但对旧电视的兼容性更稳定。
-- 如果电视是 32 位设备，安装 `app-gecko-armeabi-v7a-debug.apk`。
-- 如果系统 WebView 很旧，例如 Chromium 66 级别，优先使用 GeckoView 版本。
-- 后台时 App 会暂停浏览器内核和媒体会话，不会保持前台直播拉流状态；刚切后台时可能有少量未完成请求收尾。
+更完整的架构约束、调试按键/触屏映射、发版流程等，见 `AGENTS.md`。
 
 ## 合规说明
 
 WebTvLive 只嵌套展示电视台官网公开直播网页，不采集、不存储、不转发任何视频流，不破解登录、付费或清晰度限制。频道页面和视频内容版权归原网站及权利方所有。
 
 本项目仅用于个人学习、调试和非营利使用。如权利方认为某个公开页面不应被嵌套展示，请移除对应频道配置或停止使用。
-
-## 开发资料
-
-- `AGENTS.md`：协作、构建、模拟器和真机调试说明。
