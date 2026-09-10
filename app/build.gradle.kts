@@ -135,6 +135,13 @@ android {
         baseline = file("lint-baseline.xml")
         abortOnError = true
         warningsAsErrors = true
+        // 依赖/Gradle「有新版本可用」是随上游发布漂移的信息性提示，会让 CI 无规律地
+        // 挂在 warningsAsErrors 上；版本升级在本项目是审慎的手动决策，故关闭这些检查。
+        disable += setOf(
+            "AndroidGradlePluginVersion",
+            "GradleDependency",
+            "NewerVersionAvailable",
+        )
     }
 }
 
