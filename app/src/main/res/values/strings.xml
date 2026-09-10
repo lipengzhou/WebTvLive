@@ -6,6 +6,9 @@
     <string name="channel_timeout_fallback">频道加载超时，正在尝试%1$s</string>
     <string name="channel_timeout_retry">频道加载较慢，正在重新连接</string>
     <string name="channel_timeout_manual">频道暂时无法播放，请按上下键切换频道</string>
+    <string name="browser_failure_title">播放器暂时不可用</string>
+    <string name="browser_failure_message">%1$s\n\n可以重试重新初始化播放器，或退出应用。</string>
+    <string name="browser_failure_retry">重试</string>
     <string name="setting_video_enhancement">画质增强</string>
     <string name="setting_channel_switch_reverse">换台反转</string>
     <string name="setting_check_update">检查更新</string>

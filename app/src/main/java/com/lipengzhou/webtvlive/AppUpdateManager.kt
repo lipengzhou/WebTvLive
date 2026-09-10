@@ -187,10 +187,6 @@ class AppUpdateManager(context: Context) {
         if (task.downloadId == downloadId) inspectPending(callback)
     }
 
-    fun clearCompletedTask() {
-        clearTask(deleteFile = true)
-    }
-
     fun wasInstallPrompted(downloadId: Long): Boolean =
         prefs.getLong(KEY_INSTALL_PROMPTED_DOWNLOAD_ID, -1L) == downloadId
 

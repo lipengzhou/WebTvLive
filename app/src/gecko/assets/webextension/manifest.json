@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "WebTvLive Player Adapter",
-  "version": "2.7",
+  "version": "2.8",
   "description": "Adapts official live pages for fullscreen TV playback.",
   "browser_specific_settings": {
     "gecko": {
@@ -16,7 +16,7 @@
       "matches": [
         "https://*.yangshipin.cn/*"
       ],
-      "js": ["player_adapter.js"],
+      "js": ["protocol.js", "player_adapter.js"],
       "run_at": "document_idle"
     }
   ],

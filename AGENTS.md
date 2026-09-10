@@ -7,11 +7,17 @@
 - 一款「双内核安卓直播电视 App」：新系统可用系统原生 WebView 小包，老系统可用 GeckoView 稳定包。两种内核都打开各电视台**官方直播网页**，通过页面适配脚本把网页 `<video>` 铺满全屏，做成「像传统电视一样换台」的体验。
 - 语言 Kotlin，构建 Kotlin DSL + Version Catalog（`gradle/libs.versions.toml`），原生 XML View（不用 Compose）。
 - 核心文件：
-  - `app/src/main/java/com/lipengzhou/webtvlive/MainActivity.kt`：共享频道/菜单/设置/超时恢复/遥控器按键逻辑。
+  - `app/src/main/java/com/lipengzhou/webtvlive/MainActivity.kt`：生命周期、浏览器承载、顶层输入路由与播放 effect 执行。
   - `app/src/main/java/com/lipengzhou/webtvlive/BrowserEngine.kt`：共享浏览器内核接口。
+  - `app/src/main/java/com/lipengzhou/webtvlive/BrowserProtocol.kt`：版本化原生/页面消息协议。
+  - `app/src/main/java/com/lipengzhou/webtvlive/PlaybackCoordinator.kt`：播放请求、超时、重试与回退状态机。
+  - `app/src/main/java/com/lipengzhou/webtvlive/ChannelMenuController.kt`：频道菜单、节目单与三列遥控器导航。
+  - `app/src/main/java/com/lipengzhou/webtvlive/SettingsPanelController.kt`：右侧设置面板、设置持久化与遥控器导航。
+  - `app/src/main/java/com/lipengzhou/webtvlive/PlaybackTouchController.kt`：单双击、亮度/音量、中央换台与底部触屏控制。
+  - `app/src/main/java/com/lipengzhou/webtvlive/AppUpdateController.kt`：更新检查、下载恢复、校验与安装交互。
   - `app/src/gecko/java/com/lipengzhou/webtvlive/`：GeckoView 内核实现、进程级 GeckoRuntime 创建与首次页面预热。
   - `app/src/webview/java/com/lipengzhou/webtvlive/`：系统原生 WebView 内核实现。
-  - `app/src/main/assets/webextension/player_adapter.js`：两种内核共用的页面播放器适配脚本；Gecko 通过 WebExtension 注入，WebView 通过 `evaluateJavascript` 注入。
+  - `app/src/main/assets/webextension/protocol.js` / `player_adapter.js`：两种内核共用的版本化协议与页面播放器适配脚本；Gecko 通过 WebExtension 注入，WebView 通过 `evaluateJavascript` 注入。
   - `app/src/gecko/assets/webextension/manifest.json` / `request_filter.js`：GeckoView 专用内置 WebExtension 清单和请求过滤后台脚本。
   - `app/src/main/res/layout/activity_main.xml`：黑底 FrameLayout + 浏览器容器 + 频道名浮层。
 

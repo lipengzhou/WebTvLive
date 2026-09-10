@@ -5,7 +5,7 @@ import androidx.annotation.StringRes
 /** 可由原生设置面板下发给 WebExtension 的画质增强档位。 */
 enum class VideoEnhancement(
     val wireValue: String,
-    @StringRes val labelRes: Int,
+    @param:StringRes val labelRes: Int,
 ) {
     ORIGINAL("original", R.string.video_enhancement_original),
     LIGHT("light", R.string.video_enhancement_light),

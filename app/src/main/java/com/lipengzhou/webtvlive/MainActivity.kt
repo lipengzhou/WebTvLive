@@ -2,37 +2,20 @@ package com.lipengzhou.webtvlive
 
 import android.annotation.SuppressLint
 import android.app.AlertDialog
-import android.app.DownloadManager
-import android.content.ActivityNotFoundException
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
-import android.media.AudioManager
-import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.provider.Settings
 import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
-import android.view.SoundEffectConstants
 import android.view.View
-import android.view.ViewConfiguration
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.recyclerview.widget.LinearLayoutManager
 import com.lipengzhou.webtvlive.databinding.ActivityMainBinding
-import kotlin.math.abs
-import kotlin.math.roundToInt
 
 /**
  * WebTvLive：
@@ -47,25 +30,13 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var browserEngine: BrowserEngine
-    private var pageLoadInProgress = false
-    private var channelSwitchRequestId = 0L
-    private var waitingPlaybackRequestId: Long? = null
     private var activityStartedAt = 0L
-    private var nextPlaybackAttemptId = 0L
-    private var playbackAttempt: PlaybackAttempt? = null
-    private lateinit var updateManager: AppUpdateManager
-    private var updateDialog: AlertDialog? = null
-    private var pendingUpdate: AppUpdateManager.CheckResult.Available? = null
-    private var pendingInstall: AppUpdateManager.PendingResult.Ready? = null
-    private var automaticUpdateCheckStarted = false
-    private var updateCheckInProgress = false
-    private var manualUpdateCheckQueued = false
-    private var activeUpdateCheckIsManual = false
-    private var pendingDownloadInspected = false
-    private var waitingForInstallPermission = false
-    private var replayUnsupportedToast: Toast? = null
-    private var replayUnsupportedToastShownAt = 0L
-
+    private lateinit var playbackCoordinator: PlaybackCoordinator
+    private var scheduledPlaybackAttemptId: Long? = null
+    private var browserEngineGeneration = 0L
+    private var browserRecoveryCount = 0
+    private var browserFailureDialog: AlertDialog? = null
+    private var updateController: AppUpdateController? = null
     // 返回键两次退出
     private var lastBackPressedTime = 0L
 
@@ -74,153 +45,46 @@ class MainActivity : AppCompatActivity() {
 
     // 当前频道下标（遥控器上/下切换）；无记录时默认 CCTV-13 新闻，保持与旧版一致。
     // 这里用的是「所有分类频道拉平后的一维下标」，见 TvCatalog.flatChannels。
-    private var currentChannelIndex = DEFAULT_CHANNEL_INDEX
-    private var lastSuccessfulChannelIndex = DEFAULT_CHANNEL_INDEX
+    private val currentChannelIndex: Int
+        get() = playbackCoordinator.currentChannelIndex
 
     // region 侧边菜单状态
     // 菜单是否展开。菜单只是盖在视频上的左侧浮层，展开期间不碰浏览器 View，视频照常播放。
-    private var menuVisible = false
-    // 当前活动列：分类、频道或节目单。方向键上/下作用在活动列上。
-    private var activeColumn = COLUMN_CHANNEL
-    // 右栏当前展示的是哪个分类的频道
-    private var menuCategoryIndex = 0
-
-    private lateinit var categoryAdapter: MenuAdapter
-    private lateinit var channelAdapter: MenuAdapter
-    private lateinit var programGuideAdapter: ProgramGuideAdapter
-    private lateinit var programGuideRepository: ProgramGuideRepository
-    private var selectedProgramGuidePid: String? = null
-    private var selectedProgramGuideDate: String? = null
-    private var menuInitialized = false
+    private val panelCoordinator = PanelCoordinator()
+    private val menuVisible: Boolean
+        get() = panelCoordinator.channelsVisible
+    private lateinit var channelMenuController: ChannelMenuController
     // endregion
 
     // region 右侧系统设置面板状态
-    private var settingsVisible = false
-    private var settingsInitialized = false
-    private var settingsActiveColumn = COLUMN_SETTING_VALUE
-    private lateinit var settingsCategoryAdapter: MenuAdapter
-    private lateinit var settingsValueAdapter: MenuAdapter
-    private var videoEnhancement = VideoEnhancement.ORIGINAL
-    private var channelSwitchReversed = false
+    private val settingsVisible: Boolean
+        get() = panelCoordinator.settingsVisible
+    private lateinit var settingsController: SettingsPanelController
     // endregion
 
-    // region 触屏亮度/音量状态
-    private val audioManager by lazy { getSystemService(AudioManager::class.java) }
-    private val touchSlop by lazy { ViewConfiguration.get(this).scaledTouchSlop }
-    private var touchGesture: TouchGesture? = null
-    private var touchControlChildGestureActive = false
-    private var pendingSingleTapX = 0f
-    private var pendingSingleTapTime = 0L
-    private var playbackBrightness: Float? = null
-    // endregion
+    private lateinit var touchController: PlaybackTouchController
 
     // 主线程 Handler：控制频道名浮层自动隐藏、以及换台防抖
     private val uiHandler = Handler(Looper.getMainLooper())
     private val hideChannelNameRunnable = Runnable {
         binding.channelName.visibility = View.GONE
     }
-    private val hideTouchAdjustmentRunnable = Runnable {
-        binding.touchAdjustmentOverlay.visibility = View.GONE
-    }
-    private val hideTouchControlsRunnable = Runnable {
-        hideTouchControls()
-    }
     private val autoClosePanelRunnable = Runnable {
-        closeMenu()
-        closeSettings()
-    }
-    private val singleTapRunnable = Runnable {
-        handleConfirmedSingleTap()
+        channelMenuController.close()
+        settingsController.close()
     }
     // 换台防抖：狂按遥控器时不每次都加载，停手后只对最终频道加载一次
     private val loadChannelRunnable = Runnable { loadCurrentChannel() }
-    private val loadProgramGuideRunnable = Runnable { loadSelectedProgramGuide() }
-    private val refreshProgramGuideClockRunnable = object : Runnable {
-        override fun run() {
-            if (!menuVisible || !::programGuideAdapter.isInitialized) return
-            if (selectedProgramGuideDate != ProgramGuideRepository.today()) {
-                scheduleSelectedProgramGuideLoad()
-            } else {
-                val currentIndex = programGuideAdapter.updateNow()
-                if (activeColumn != COLUMN_PROGRAM_GUIDE && currentIndex >= 0) {
-                    scrollProgramGuideToOneThird(currentIndex)
-                }
-            }
-            uiHandler.postDelayed(this, PROGRAM_GUIDE_CLOCK_REFRESH_MS)
-        }
+    private val playbackTimeoutRunnable = Runnable {
+        scheduledPlaybackAttemptId?.let(::handlePlaybackTimeout)
     }
-    private val playbackTimeoutRunnable = Runnable { handlePlaybackTimeout() }
-    private val automaticUpdateCheckRunnable = Runnable { startAutomaticUpdateCheck() }
-
-    private enum class PlaybackStage {
-        IN_PAGE,
-        DIRECT,
-        DIRECT_RETRY,
-        FALLBACK,
-    }
-
-    private data class PlaybackAttempt(
-        val id: Long,
-        val channelIndex: Int,
-        val stage: PlaybackStage,
-        val startedAt: Long,
-        var requestId: Long? = null,
-    )
-
-    private enum class TouchGestureMode {
-        PENDING,
-        BRIGHTNESS,
-        VOLUME,
-        NEXT_CHANNEL,
-        PREVIOUS_CHANNEL,
-        IGNORED,
-    }
-
-    private data class TouchGesture(
-        val startX: Float,
-        val startY: Float,
-        var mode: TouchGestureMode = TouchGestureMode.PENDING,
-        var startValue: Float = 0f,
-        var lastPercent: Int = -1,
-    )
-
-    private enum class SettingsItem(val titleRes: Int) {
-        VIDEO_ENHANCEMENT(R.string.setting_video_enhancement),
-        CHANNEL_SWITCH_REVERSE(R.string.setting_channel_switch_reverse),
-        CHECK_UPDATE(R.string.setting_check_update),
-        ABOUT(R.string.setting_about),
-    }
-
-    private val availableSettingsItems = SettingsItem.entries.filter { item ->
-        BuildConfig.APP_UPDATES_ENABLED || item != SettingsItem.CHECK_UPDATE
-    }
-
     companion object {
         private const val BACK_EXIT_INTERVAL = 2000L
         private const val CHANNEL_NAME_SHOW_MS = 3000L
-        private const val TOUCH_ADJUSTMENT_SHOW_MS = 900L
-        private const val TOUCH_CONTROLS_SHOW_MS = 3000L
         private const val PANEL_AUTO_CLOSE_MS = 12_000L
-        private const val TOUCH_DOUBLE_TAP_MS = 300L
-        private const val CHANNEL_GESTURE_CENTER_WIDTH_FRACTION = 0.3f
-        private const val CHANNEL_GESTURE_DISTANCE_DP = 96f
-        private const val TOUCH_GESTURE_GAIN = 1.15f
-        private const val GESTURE_AXIS_RATIO = 1.2f
-        private const val MIN_PLAYBACK_BRIGHTNESS = 0.05f
-        private const val DEFAULT_SYSTEM_BRIGHTNESS = 0.5f
         // 换台防抖：停止按键 600ms 后才真正加载，避免连续切台把每个中间台都请求一遍被 CCTV 限流
         private const val CHANNEL_SWITCH_DEBOUNCE_MS = 600L
-        private const val PROGRAM_GUIDE_LOAD_DEBOUNCE_MS = 250L
-        private const val PROGRAM_GUIDE_CLOCK_REFRESH_MS = 60_000L
-        private const val REPLAY_UNSUPPORTED_TOAST_THROTTLE_MS = 2_000L
-        // 已加载页面内换台通常很快；超时后改用该频道的官网 pid 页面重新建链。
-        private const val IN_PAGE_PLAYBACK_TIMEOUT_MS = 18_000L
-        // 低性能电视冷启动实测正常首播也可能接近 30 秒，因此整页加载给更宽松的窗口。
-        private const val DIRECT_PLAYBACK_TIMEOUT_MS = 35_000L
-        // 页面资源已缓存后的同频道重试应明显更快，避免失败时继续长时间等待。
-        private const val DIRECT_RETRY_TIMEOUT_MS = 25_000L
-        private const val FALLBACK_PLAYBACK_TIMEOUT_MS = 30_000L
-        private const val AUTOMATIC_UPDATE_CHECK_DELAY_MS = 15_000L
+        private const val MAX_BROWSER_RECOVERY_COUNT = 1
         private const val DEFAULT_CHANNEL_INDEX = 13
         private const val STABLE_FALLBACK_SITE_NAME = "CCTV9"
         private const val SECONDARY_FALLBACK_SITE_NAME = "CCTV10"
@@ -228,43 +92,7 @@ class MainActivity : AppCompatActivity() {
         private const val PREFS_NAME = "webtvlive_prefs"
         private const val KEY_LAST_CHANNEL = "last_channel_index"
         private const val KEY_LAST_SUCCESSFUL_CHANNEL = "last_successful_channel_index"
-        private const val KEY_VIDEO_ENHANCEMENT = "video_enhancement"
-        private const val KEY_CHANNEL_SWITCH_REVERSED = "channel_switch_reversed"
-        private const val KEY_PLAYBACK_BRIGHTNESS = "playback_brightness"
-        // 侧边菜单三列
-        private const val COLUMN_CATEGORY = 0
-        private const val COLUMN_CHANNEL = 1
-        private const val COLUMN_PROGRAM_GUIDE = 2
-        private const val COLUMN_SETTING_CATEGORY = 0
-        private const val COLUMN_SETTING_VALUE = 1
         private const val TAG = "WebTvLive"
-        private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
-    }
-
-    private val installPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult(),
-    ) {
-        waitingForInstallPermission = false
-        val ready = pendingInstall ?: return@registerForActivityResult
-        if (canInstallPackages()) {
-            launchPackageInstaller(ready)
-        } else {
-            pendingInstall = null
-            Toast.makeText(
-                this,
-                R.string.update_install_permission_denied,
-                Toast.LENGTH_LONG,
-            ).show()
-        }
-    }
-
-    private val downloadCompleteReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
-            if (!::updateManager.isInitialized) return
-            val downloadId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
-            updateManager.handleDownloadComplete(downloadId, ::handlePendingDownload)
-        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -272,112 +100,193 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        touchController = PlaybackTouchController(
+            activity = this,
+            binding = binding,
+            panelsVisible = { menuVisible || settingsVisible },
+            closePanels = {
+                channelMenuController.close()
+                settingsController.close()
+            },
+            onPanelInteraction = ::schedulePanelAutoClose,
+            openChannels = { channelMenuController.open(currentChannelIndex) },
+            openSettings = { settingsController.open() },
+            switchChannel = ::switchChannel,
+        )
+        channelMenuController = ChannelMenuController(
+            activity = this,
+            binding = binding,
+            panelCoordinator = panelCoordinator,
+            beforeOpen = {
+                touchController.prepareForPanel()
+                settingsController.close()
+            },
+            onOpenSettings = { settingsController.open() },
+            onInteraction = ::schedulePanelAutoClose,
+            onClosed = {
+                if (!settingsVisible) cancelPanelAutoClose()
+                updateController?.onPanelsClosed()
+            },
+            onChannelChosen = { flatIndex ->
+                cancelPanelAutoClose()
+                if (flatIndex != currentChannelIndex) {
+                    playbackCoordinator.selectChannel(flatIndex)
+                    loadCurrentChannel()
+                }
+            },
+        )
+        settingsController = SettingsPanelController(
+            activity = this,
+            binding = binding,
+            panelCoordinator = panelCoordinator,
+            beforeOpen = {
+                touchController.prepareForPanel()
+                channelMenuController.close()
+            },
+            onInteraction = ::schedulePanelAutoClose,
+            onClosed = {
+                if (!menuVisible) cancelPanelAutoClose()
+                updateController?.onPanelsClosed()
+            },
+            onVideoEnhancementChanged = { browserEngine.applyVideoEnhancement(it) },
+            onManualUpdateCheck = {
+                cancelPanelAutoClose()
+                updateController?.performManualCheck()
+            },
+        )
         if (BuildConfig.APP_UPDATES_ENABLED) {
-            updateManager = AppUpdateManager(this)
-            ContextCompat.registerReceiver(
-                this,
-                downloadCompleteReceiver,
-                IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
-                ContextCompat.RECEIVER_EXPORTED,
-            )
+            updateController = AppUpdateController(
+                activity = this,
+                panelsVisible = { menuVisible || settingsVisible },
+                onManualUpdateAvailable = settingsController::close,
+                onManualCheckFinished = ::schedulePanelAutoClose,
+            ).also(AppUpdateController::start)
         } else {
             Log.i(TAG, "App updates disabled for ${BuildConfig.BUILD_TYPE} build")
         }
 
         enableImmersiveFullscreen()
         keepScreenOn()
-        setupTouchControls()
 
-        lastSuccessfulChannelIndex = restoreLastSuccessfulChannelIndex()
-        currentChannelIndex = lastSuccessfulChannelIndex
-        videoEnhancement = restoreVideoEnhancement()
-        channelSwitchReversed = restoreChannelSwitchReversed()
-        playbackBrightness = restorePlaybackBrightness()
-        playbackBrightness?.let { applyPlaybackBrightness(it) }
-        programGuideRepository = ProgramGuideRepository(applicationContext)
+        val restoredChannelIndex = restoreLastSuccessfulChannelIndex()
+        playbackCoordinator = PlaybackCoordinator(
+            channelCount = TvCatalog.flatChannels.size,
+            initialChannelIndex = restoredChannelIndex,
+            stableFallbackIndex = TvCatalog.indexOfSiteName(STABLE_FALLBACK_SITE_NAME),
+            secondaryFallbackIndex = TvCatalog.indexOfSiteName(SECONDARY_FALLBACK_SITE_NAME),
+            clockMillis = SystemClock::elapsedRealtime,
+        )
         Log.i(TAG, "StartupTiming: activity_ready elapsed=${startupElapsed()}ms")
         createAndAttachBrowserEngine()
-        if (BuildConfig.APP_UPDATES_ENABLED) {
-            uiHandler.postDelayed(automaticUpdateCheckRunnable, AUTOMATIC_UPDATE_CHECK_DELAY_MS)
-        }
     }
 
     // region 浏览器内核
     private fun createAndAttachBrowserEngine() {
         browserEngine = createBrowserEngine(this)
+        val generation = ++browserEngineGeneration
         browserEngine.attach(
             binding.webContainer,
-            object : BrowserEngine.Listener {
-                override fun onReady() {
-                    if (isFinishing || isDestroyed) return
-                    Log.i(TAG, "Browser engine ready; elapsed=${startupElapsed()}ms")
-                    browserEngine.applyVideoEnhancement(videoEnhancement)
-                    loadCurrentChannel()
+            BrowserEngine.Listener { event ->
+                if (generation != browserEngineGeneration || isFinishing || isDestroyed) {
+                    return@Listener
                 }
+                when (event) {
+                    BrowserEngine.Event.Initialized -> {
+                    Log.i(TAG, "Browser engine ready; elapsed=${startupElapsed()}ms")
+                    browserEngine.applyVideoEnhancement(settingsController.videoEnhancement)
+                    loadCurrentChannel()
+                    }
 
-                override fun onPageStarted(url: String) {
-                    pageLoadInProgress = true
-                    Log.i(TAG, "Browser page start: $url")
-                    if (url.startsWith(TvCatalog.YANGSHIPIN_HOME_URL)) {
+                    is BrowserEngine.Event.PageStarted -> {
+                    Log.i(TAG, "Browser page start: ${event.url}")
+                    if (event.url.startsWith(TvCatalog.YANGSHIPIN_HOME_URL)) {
                         Log.i(TAG, "StartupTiming: page_started elapsed=${startupElapsed()}ms")
                     }
-                }
+                    }
 
-                override fun onPageStopped(success: Boolean) {
-                    pageLoadInProgress = false
-                    Log.i(TAG, "Browser page stop: success=$success")
-                }
+                    is BrowserEngine.Event.PageStopped -> {
+                    Log.i(TAG, "Browser page stop: success=${event.success}")
+                    }
 
-                override fun onPlaybackReady(requestId: Long) {
-                    handlePlaybackReady(requestId)
-                }
+                    is BrowserEngine.Event.PlaybackReady -> handlePlaybackReady(event.requestId)
 
-                override fun onChannelSelected(channel: String) {
-                    Log.i(TAG, "Yangshipin channel selected: $channel")
-                }
+                    is BrowserEngine.Event.ChannelSelected -> {
+                        Log.i(TAG, "Yangshipin channel selected: ${event.channel}")
+                    }
 
-                override fun onChannelNotFound(channel: String) {
-                    Log.e(TAG, "Yangshipin channel not found: $channel")
-                }
+                    is BrowserEngine.Event.Diagnostic -> Log.i(TAG, event.message)
 
-                override fun onDiagnostic(message: String) {
-                    Log.i(TAG, message)
-                }
-
-                override fun onCrash() {
-                    Log.e(TAG, "Browser content process crashed")
+                    is BrowserEngine.Event.Failed -> handleBrowserFailure(event.failure)
                 }
             },
         )
     }
 
+    private fun handleBrowserFailure(failure: BrowserEngine.Failure) {
+        Log.e(TAG, "Browser failure: kind=${failure.kind}, detail=${failure.detail}")
+        if (failure.kind == BrowserEngine.FailureKind.PROTOCOL) return
+        cancelPlaybackAttempt()
+        binding.loadingText.visibility = View.VISIBLE
+        if (failure.recoverable && browserRecoveryCount < MAX_BROWSER_RECOVERY_COUNT) {
+            browserRecoveryCount += 1
+            browserEngineGeneration += 1
+            uiHandler.post(::recreateBrowserEngine)
+        } else {
+            showBrowserFailureDialog(failure.detail)
+        }
+    }
+
+    private fun recreateBrowserEngine() {
+        if (isFinishing || isDestroyed) return
+        if (::browserEngine.isInitialized) browserEngine.destroy()
+        binding.webContainer.removeAllViews()
+        createAndAttachBrowserEngine()
+    }
+
+    private fun showBrowserFailureDialog(detail: String) {
+        if (browserFailureDialog?.isShowing == true || isFinishing || isDestroyed) return
+        browserFailureDialog = AlertDialog.Builder(this)
+            .setTitle(R.string.browser_failure_title)
+            .setMessage(getString(R.string.browser_failure_message, detail))
+            .setNegativeButton(R.string.touch_action_exit) { _, _ -> finish() }
+            .setPositiveButton(R.string.browser_failure_retry) { _, _ ->
+                browserRecoveryCount = 0
+                recreateBrowserEngine()
+            }
+            .setCancelable(false)
+            .setOnDismissListener { browserFailureDialog = null }
+            .create()
+            .also { dialog ->
+                dialog.setOnShowListener {
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).requestFocus()
+                }
+                dialog.show()
+            }
+    }
+
     private fun handlePlaybackReady(requestId: Long) {
-        val attempt = playbackAttempt
-        if (requestId == waitingPlaybackRequestId && attempt?.requestId == requestId) {
+        val ready = playbackCoordinator.onPlaybackReady(requestId)
+        if (ready != null) {
             uiHandler.removeCallbacks(playbackTimeoutRunnable)
-            waitingPlaybackRequestId = null
-            playbackAttempt = null
-            currentChannelIndex = attempt.channelIndex
-            lastSuccessfulChannelIndex = attempt.channelIndex
-            saveSuccessfulChannelIndex(attempt.channelIndex)
+            scheduledPlaybackAttemptId = null
+            browserRecoveryCount = 0
+            saveSuccessfulChannelIndex(ready.channelIndex)
             binding.loadingText.visibility = View.GONE
-            startAutomaticUpdateCheck()
+            updateController?.startAutomaticCheck()
             Log.i(
                 TAG,
                 "Playback ready; loading overlay hidden: request=$requestId, " +
-                    "channel=${TvCatalog.flatChannels[attempt.channelIndex].siteName}",
+                    "channel=${TvCatalog.flatChannels[ready.channelIndex].siteName}",
             )
             Log.i(
                 TAG,
                 "StartupTiming: playback_ready total=${startupElapsed()}ms, " +
-                    "attempt=${SystemClock.elapsedRealtime() - attempt.startedAt}ms, " +
-                    "stage=${attempt.stage}",
+                    "attempt=${ready.elapsedMillis}ms, stage=${ready.stage}",
             )
         } else {
             Log.i(
                 TAG,
-                "Ignored stale playing message: request=$requestId, " +
-                    "waiting=$waitingPlaybackRequestId",
+                "Ignored stale playing message: request=$requestId",
             )
         }
     }
@@ -401,372 +310,17 @@ class MainActivity : AppCompatActivity() {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
             enableImmersiveFullscreen()
-            maybeShowPendingUpdate()
-            maybeInstallPendingUpdate()
+            updateController?.onWindowFocusChanged()
         }
     }
     // endregion
 
-    // region 触屏亮度/音量
-    private fun setupTouchControls() {
-        binding.touchControls.setOnClickListener { hideTouchControls() }
-        binding.touchChannelButton.setOnClickListener {
-            hideTouchControls()
-            openMenu()
-        }
-        binding.touchSettingsButton.setOnClickListener {
-            hideTouchControls()
-            openSettings()
-        }
-        binding.touchExitButton.setOnClickListener {
-            hideTouchControls()
-            finish()
-        }
-    }
-
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        if (!::binding.isInitialized) {
+        if (!::touchController.isInitialized || !touchController.intercept(event)) {
             return super.dispatchTouchEvent(event)
         }
-        if (menuVisible || settingsVisible) {
-            if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-                if (event.isOutsideVisiblePanel()) {
-                    closeMenu()
-                    closeSettings()
-                    return true
-                }
-                schedulePanelAutoClose()
-            }
-            return super.dispatchTouchEvent(event)
-        }
-
-        val fromTouchControls = if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-            if (event.isInsideView(binding.touchControls)) {
-                touchControlChildGestureActive = true
-                true
-            } else {
-                false
-            }
-        } else {
-            touchControlChildGestureActive
-        }
-        if (fromTouchControls) {
-            if (
-                event.actionMasked == MotionEvent.ACTION_UP ||
-                event.actionMasked == MotionEvent.ACTION_CANCEL
-            ) {
-                touchControlChildGestureActive = false
-            }
-            return super.dispatchTouchEvent(event)
-        }
-        return if (handlePlaybackTouch(event)) true else super.dispatchTouchEvent(event)
+        return true
     }
-
-    private fun handlePlaybackTouch(event: MotionEvent): Boolean {
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                beginPlaybackTouch(event)
-                return true
-            }
-
-            MotionEvent.ACTION_MOVE -> {
-                if (event.pointerCount != 1) {
-                    cancelPlaybackTouch()
-                    return true
-                }
-                updatePlaybackTouch(event)
-                return true
-            }
-
-            MotionEvent.ACTION_POINTER_DOWN -> {
-                cancelPlaybackTouch()
-                return true
-            }
-
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                finishPlaybackTouch()
-                return true
-            }
-        }
-        return false
-    }
-
-    private fun MotionEvent.isInsideView(view: View): Boolean {
-        if (view.visibility != View.VISIBLE) return false
-        val location = IntArray(2)
-        view.getLocationOnScreen(location)
-        val rawX = rawX
-        val rawY = rawY
-        return rawX >= location[0] &&
-            rawX <= location[0] + view.width &&
-            rawY >= location[1] &&
-            rawY <= location[1] + view.height
-    }
-
-    private fun MotionEvent.isOutsideVisiblePanel(): Boolean {
-        val insideMenu = menuVisible && isInsideView(binding.menuPanel)
-        val insideSettings = settingsVisible && isInsideView(binding.settingsPanel)
-        return !insideMenu && !insideSettings
-    }
-
-    private fun beginPlaybackTouch(event: MotionEvent) {
-        uiHandler.removeCallbacks(hideTouchControlsRunnable)
-        val rootWidth = binding.rootLayout.width
-        if (rootWidth <= 0) return
-        touchGesture = TouchGesture(
-            startX = event.x,
-            startY = event.y,
-        )
-    }
-
-    private fun updatePlaybackTouch(event: MotionEvent) {
-        val gesture = touchGesture ?: return
-        val horizontalDelta = event.x - gesture.startX
-        val verticalDelta = gesture.startY - event.y
-
-        if (gesture.mode == TouchGestureMode.PENDING) {
-            gesture.mode = detectTouchGestureMode(
-                startX = gesture.startX,
-                horizontalDelta = horizontalDelta,
-                verticalDelta = verticalDelta,
-            )
-            when (gesture.mode) {
-                TouchGestureMode.BRIGHTNESS -> {
-                    cancelPendingSingleTap()
-                    gesture.startValue = currentPlaybackBrightness()
-                    hideTouchControls()
-                }
-                TouchGestureMode.VOLUME -> {
-                    cancelPendingSingleTap()
-                    gesture.startValue = currentMusicVolumeFraction()
-                    hideTouchControls()
-                }
-                TouchGestureMode.NEXT_CHANNEL, TouchGestureMode.PREVIOUS_CHANNEL -> {
-                    cancelPendingSingleTap()
-                    hideTouchControls()
-                }
-                TouchGestureMode.IGNORED, TouchGestureMode.PENDING -> Unit
-            }
-        }
-
-        if (
-            gesture.mode == TouchGestureMode.PENDING ||
-            gesture.mode == TouchGestureMode.IGNORED ||
-            gesture.mode == TouchGestureMode.NEXT_CHANNEL ||
-            gesture.mode == TouchGestureMode.PREVIOUS_CHANNEL
-        ) {
-            return
-        }
-
-        val rootHeight = binding.rootLayout.height.coerceAtLeast(1)
-        val nextValue = (
-            gesture.startValue +
-                verticalDelta / rootHeight * TOUCH_GESTURE_GAIN
-            ).coerceIn(0f, 1f)
-
-        when (gesture.mode) {
-            TouchGestureMode.BRIGHTNESS -> updatePlaybackBrightness(nextValue, gesture)
-            TouchGestureMode.VOLUME -> updateMusicVolume(nextValue, gesture)
-            TouchGestureMode.PENDING, TouchGestureMode.NEXT_CHANNEL,
-            TouchGestureMode.PREVIOUS_CHANNEL, TouchGestureMode.IGNORED -> Unit
-        }
-    }
-
-    private fun detectTouchGestureMode(
-        startX: Float,
-        horizontalDelta: Float,
-        verticalDelta: Float,
-    ): TouchGestureMode {
-        val absX = abs(horizontalDelta)
-        val absY = abs(verticalDelta)
-        val rootWidth = binding.rootLayout.width
-        val channelMode = detectCenterChannelGesture(startX, verticalDelta, absY)
-
-        if (absX >= touchSlop && absX > absY * GESTURE_AXIS_RATIO) {
-            return TouchGestureMode.IGNORED
-        }
-
-        if (absY >= touchSlop && absY > absX * GESTURE_AXIS_RATIO) {
-            if (channelMode != null) return channelMode
-            return if (startX < rootWidth / 2f) {
-                TouchGestureMode.BRIGHTNESS
-            } else {
-                TouchGestureMode.VOLUME
-            }
-        }
-
-        return TouchGestureMode.PENDING
-    }
-
-    private fun detectCenterChannelGesture(
-        startX: Float,
-        verticalDelta: Float,
-        absY: Float,
-    ): TouchGestureMode? {
-        val rootWidth = binding.rootLayout.width
-        val centerWidth = rootWidth * CHANNEL_GESTURE_CENTER_WIDTH_FRACTION
-        val centerStart = (rootWidth - centerWidth) / 2f
-        val centerEnd = centerStart + centerWidth
-        if (startX !in centerStart..centerEnd) {
-            return null
-        }
-        if (absY < CHANNEL_GESTURE_DISTANCE_DP.dp()) return TouchGestureMode.PENDING
-        return if (verticalDelta > 0f) {
-            TouchGestureMode.NEXT_CHANNEL
-        } else {
-            TouchGestureMode.PREVIOUS_CHANNEL
-        }
-    }
-
-    private fun updatePlaybackBrightness(value: Float, gesture: TouchGesture) {
-        val brightness = value.coerceIn(MIN_PLAYBACK_BRIGHTNESS, 1f)
-        applyPlaybackBrightness(brightness)
-        val percent = (brightness * 100).roundToInt().coerceIn(0, 100)
-        showTouchAdjustment(TouchGestureMode.BRIGHTNESS, percent, gesture)
-    }
-
-    private fun applyPlaybackBrightness(value: Float) {
-        val brightness = value.coerceIn(MIN_PLAYBACK_BRIGHTNESS, 1f)
-        playbackBrightness = brightness
-        val attributes = window.attributes
-        attributes.screenBrightness = brightness
-        window.attributes = attributes
-    }
-
-    private fun updateMusicVolume(value: Float, gesture: TouchGesture) {
-        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-            .coerceAtLeast(1)
-        val volume = (value * maxVolume).roundToInt().coerceIn(0, maxVolume)
-        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, volume, 0)
-        val percent = (volume * 100f / maxVolume).roundToInt().coerceIn(0, 100)
-        showTouchAdjustment(TouchGestureMode.VOLUME, percent, gesture)
-    }
-
-    private fun showTouchAdjustment(
-        type: TouchGestureMode,
-        percent: Int,
-        gesture: TouchGesture,
-    ) {
-        if (gesture.lastPercent == percent) return
-        gesture.lastPercent = percent
-        binding.touchAdjustmentOverlay.text = when (type) {
-            TouchGestureMode.BRIGHTNESS -> getString(
-                R.string.touch_adjustment_brightness,
-                percent,
-            )
-            TouchGestureMode.VOLUME -> getString(R.string.touch_adjustment_volume, percent)
-            TouchGestureMode.PENDING, TouchGestureMode.NEXT_CHANNEL,
-            TouchGestureMode.PREVIOUS_CHANNEL, TouchGestureMode.IGNORED -> ""
-        }
-        binding.touchAdjustmentOverlay.visibility = View.VISIBLE
-        uiHandler.removeCallbacks(hideTouchAdjustmentRunnable)
-    }
-
-    private fun finishPlaybackTouch() {
-        val gesture = touchGesture
-        val completedMode = gesture?.mode
-        touchGesture = null
-
-        when (completedMode) {
-            TouchGestureMode.PENDING -> handlePlaybackTap(gesture?.startX ?: 0f)
-            TouchGestureMode.BRIGHTNESS -> {
-                playbackBrightness?.let { savePlaybackBrightness(it) }
-                scheduleTouchAdjustmentOverlayHide()
-            }
-            TouchGestureMode.VOLUME -> scheduleTouchAdjustmentOverlayHide()
-            TouchGestureMode.NEXT_CHANNEL -> {
-                Log.i(TAG, "Touch channel gesture: next")
-                switchChannel(+1)
-            }
-            TouchGestureMode.PREVIOUS_CHANNEL -> {
-                Log.i(TAG, "Touch channel gesture: previous")
-                switchChannel(-1)
-            }
-            TouchGestureMode.IGNORED, null -> Unit
-        }
-    }
-
-    private fun handlePlaybackTap(x: Float) {
-        val rootWidth = binding.rootLayout.width
-        if (rootWidth <= 0) return
-        val now = SystemClock.elapsedRealtime()
-        val previousX = pendingSingleTapX
-        val previousTime = pendingSingleTapTime
-        val isDoubleTap = previousTime > 0L &&
-            now - previousTime <= TOUCH_DOUBLE_TAP_MS &&
-            isSameHalf(previousX, x)
-
-        uiHandler.removeCallbacks(singleTapRunnable)
-        if (isDoubleTap) {
-            pendingSingleTapTime = 0L
-            pendingSingleTapX = 0f
-            hideTouchControls()
-            if (x < rootWidth / 2f) {
-                openMenu()
-            } else {
-                openSettings()
-            }
-        } else {
-            pendingSingleTapX = x
-            pendingSingleTapTime = now
-            uiHandler.postDelayed(singleTapRunnable, TOUCH_DOUBLE_TAP_MS)
-        }
-    }
-
-    private fun handleConfirmedSingleTap() {
-        pendingSingleTapTime = 0L
-        pendingSingleTapX = 0f
-        toggleTouchControls()
-    }
-
-    private fun isSameHalf(firstX: Float, secondX: Float): Boolean {
-        val rootWidth = binding.rootLayout.width
-        if (rootWidth <= 0) return false
-        return (firstX < rootWidth / 2f) == (secondX < rootWidth / 2f)
-    }
-
-    private fun scheduleTouchAdjustmentOverlayHide() {
-        uiHandler.removeCallbacks(hideTouchAdjustmentRunnable)
-        uiHandler.postDelayed(hideTouchAdjustmentRunnable, TOUCH_ADJUSTMENT_SHOW_MS)
-    }
-
-    private fun cancelPlaybackTouch() {
-        touchGesture = null
-        hideTouchAdjustment()
-    }
-
-    private fun toggleTouchControls() {
-        if (binding.touchControls.visibility == View.VISIBLE) {
-            hideTouchControls()
-        } else {
-            showTouchControls()
-        }
-    }
-
-    private fun showTouchControls() {
-        binding.touchControls.visibility = View.VISIBLE
-        binding.touchControls.bringToFront()
-        uiHandler.removeCallbacks(hideTouchControlsRunnable)
-        uiHandler.postDelayed(hideTouchControlsRunnable, TOUCH_CONTROLS_SHOW_MS)
-    }
-
-    private fun hideTouchControls() {
-        uiHandler.removeCallbacks(hideTouchControlsRunnable)
-        binding.touchControls.visibility = View.GONE
-    }
-
-    private fun cancelPendingSingleTap() {
-        pendingSingleTapTime = 0L
-        pendingSingleTapX = 0f
-        uiHandler.removeCallbacks(singleTapRunnable)
-    }
-
-    private fun hideTouchAdjustment() {
-        uiHandler.removeCallbacks(hideTouchAdjustmentRunnable)
-        binding.touchAdjustmentOverlay.visibility = View.GONE
-    }
-
-    private fun Float.dp(): Float = this * resources.displayMetrics.density
 
     private fun schedulePanelAutoClose() {
         if (!menuVisible && !settingsVisible) return
@@ -778,40 +332,6 @@ class MainActivity : AppCompatActivity() {
         uiHandler.removeCallbacks(autoClosePanelRunnable)
     }
 
-    private fun currentPlaybackBrightness(): Float {
-        val windowBrightness = window.attributes.screenBrightness
-        if (windowBrightness in 0f..1f) {
-            return windowBrightness.coerceIn(MIN_PLAYBACK_BRIGHTNESS, 1f)
-        }
-        val systemBrightness = runCatching {
-            Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS)
-        }.getOrDefault((DEFAULT_SYSTEM_BRIGHTNESS * 255).roundToInt())
-        return (systemBrightness / 255f).coerceIn(MIN_PLAYBACK_BRIGHTNESS, 1f)
-    }
-
-    private fun currentMusicVolumeFraction(): Float {
-        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-            .coerceAtLeast(1)
-        return (audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) / maxVolume.toFloat())
-            .coerceIn(0f, 1f)
-    }
-
-    private fun restorePlaybackBrightness(): Float? {
-        if (!prefs.contains(KEY_PLAYBACK_BRIGHTNESS)) return null
-        val saved = prefs.getFloat(KEY_PLAYBACK_BRIGHTNESS, DEFAULT_SYSTEM_BRIGHTNESS)
-        return if (saved in 0f..1f) {
-            saved.coerceIn(MIN_PLAYBACK_BRIGHTNESS, 1f)
-        } else {
-            null
-        }
-    }
-
-    private fun savePlaybackBrightness(value: Float) {
-        prefs.edit()
-            .putFloat(KEY_PLAYBACK_BRIGHTNESS, value.coerceIn(MIN_PLAYBACK_BRIGHTNESS, 1f))
-            .apply()
-    }
-    // endregion
 
     // region 遥控器按键：菜单开合 / 上下换台 / 返回退出
     //
@@ -822,7 +342,7 @@ class MainActivity : AppCompatActivity() {
     // 在 dispatchKeyEvent 提前吞掉这些键，浏览器永远拿不到，两个问题一并解决。
     // 菜单展开时，同一批方向键改为在菜单内导航（此时浏览器 View 仍在后面正常播放）。
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (updateDialog?.isShowing == true) {
+        if (updateController?.isDialogShowing == true) {
             return super.dispatchKeyEvent(event)
         }
         val keyCode = event.keyCode
@@ -830,8 +350,8 @@ class MainActivity : AppCompatActivity() {
             // 只在按下时执行动作；抬起事件也一并吞掉，避免只截按下、抬起漏给 WebView
             if (event.action == KeyEvent.ACTION_DOWN) {
                 when {
-                    settingsVisible -> handleSettingsKeyDown(keyCode)
-                    menuVisible -> handleMenuKeyDown(keyCode)
+                    settingsVisible -> settingsController.handleKeyDown(keyCode)
+                    menuVisible -> channelMenuController.handleKeyDown(keyCode)
                     else -> handleRemoteKeyDown(keyCode)
                 }
             }
@@ -865,23 +385,23 @@ class MainActivity : AppCompatActivity() {
                 switchChannel(remoteChannelDelta(-1))
             }
             // OK/中央键：呼出侧边频道菜单
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> openMenu()
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER ->
+                channelMenuController.open(currentChannelIndex)
             // MENU/设置键：从右侧呼出系统设置面板
             KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_SETTINGS,
-            KeyEvent.KEYCODE_TV_CONTENTS_MENU -> openSettings()
+            KeyEvent.KEYCODE_TV_CONTENTS_MENU -> settingsController.open()
             // 左/右：本 App 不做网页内导航，吞掉即可，防止网页滚动 / 移动焦点
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> { /* no-op：故意屏蔽 */ }
         }
     }
 
     private fun remoteChannelDelta(defaultDelta: Int): Int =
-        if (channelSwitchReversed) -defaultDelta else defaultDelta
+        if (settingsController.channelSwitchReversed) -defaultDelta else defaultDelta
 
     /** 按 delta（+1/-1）循环切换频道。只更新下标 + 浮层反馈，真正加载走防抖，避免狂按时逐台请求被限流。 */
     private fun switchChannel(delta: Int) {
-        val size = TvCatalog.flatChannels.size
-        currentChannelIndex = ((currentChannelIndex + delta) % size + size) % size
-        val channel = TvCatalog.flatChannels[currentChannelIndex]
+        val channelIndex = playbackCoordinator.moveSelection(delta)
+        val channel = TvCatalog.flatChannels[channelIndex]
         // 连按浏览期间保留当前台画面、只滚动更新浮层；不马上盖遮罩/loadUrl。
         // 遮罩留到真正加载时（loadCurrentChannel）再显示——那时旧 video 已被销毁，遮罩才盖得住。
         showChannelName(channel.name)
@@ -896,139 +416,76 @@ class MainActivity : AppCompatActivity() {
     private fun loadCurrentChannel() {
         // 首次加载可能绕过防抖直接进来，这里清一次待执行的防抖任务，避免重复加载
         uiHandler.removeCallbacks(loadChannelRunnable)
-        cancelPlaybackAttempt()
+        uiHandler.removeCallbacks(playbackTimeoutRunnable)
         val channel = TvCatalog.flatChannels[currentChannelIndex]
         showChannelName(channel.name)
-
-        if (!browserEngine.canSwitchInPage()) {
-            // 首次启动直接进入目标频道页面，避免先初始化 CCTV-1、再重建目标播放器。
-            startDirectLoad(currentChannelIndex, PlaybackStage.DIRECT)
-            return
-        }
-
-        val requestId = ++channelSwitchRequestId
-        val attempt = startPlaybackAttempt(
-            channelIndex = currentChannelIndex,
-            stage = PlaybackStage.IN_PAGE,
-            timeoutMs = IN_PAGE_PLAYBACK_TIMEOUT_MS,
-        )
-        attempt.requestId = requestId
-        waitingPlaybackRequestId = requestId
-        binding.loadingText.visibility = View.VISIBLE
-        if (browserEngine.switchChannel(channel, requestId)) {
-            Log.i(
-                TAG,
-                "Requested in-page channel switch: ${channel.siteName}, request=$requestId, " +
-                    "stage=${attempt.stage}",
-            )
-            return
-        }
-
-        startDirectLoad(currentChannelIndex, PlaybackStage.DIRECT)
+        executePlaybackAttempt(playbackCoordinator.start(browserEngine.canSwitchInPage()))
     }
 
-    private fun startDirectLoad(channelIndex: Int, stage: PlaybackStage) {
-        val channel = TvCatalog.flatChannels[channelIndex]
-        cancelPlaybackAttempt()
-        currentChannelIndex = channelIndex
+    private fun executePlaybackAttempt(attempt: PlaybackCoordinator.Attempt) {
+        uiHandler.removeCallbacks(playbackTimeoutRunnable)
+        scheduledPlaybackAttemptId = attempt.attemptId
+        uiHandler.postDelayed(playbackTimeoutRunnable, attempt.timeoutMs)
         binding.loadingText.visibility = View.VISIBLE
-        val attempt = startPlaybackAttempt(
-            channelIndex = channelIndex,
-            stage = stage,
-            timeoutMs = when (stage) {
-                PlaybackStage.IN_PAGE -> IN_PAGE_PLAYBACK_TIMEOUT_MS
-                PlaybackStage.DIRECT -> DIRECT_PLAYBACK_TIMEOUT_MS
-                PlaybackStage.DIRECT_RETRY -> DIRECT_RETRY_TIMEOUT_MS
-                PlaybackStage.FALLBACK -> FALLBACK_PLAYBACK_TIMEOUT_MS
-            },
-        )
-        val requestId = ++channelSwitchRequestId
-        attempt.requestId = requestId
-        waitingPlaybackRequestId = requestId
-        browserEngine.loadChannel(channel, requestId)
-        Log.i(
-            TAG,
-            "Direct channel page load: ${channel.siteName}, pid=${channel.pid}, " +
-                "stage=$stage, attempt=${attempt.id}",
-        )
-    }
-
-    private fun startPlaybackAttempt(
-        channelIndex: Int,
-        stage: PlaybackStage,
-        timeoutMs: Long,
-    ): PlaybackAttempt {
-        cancelPlaybackAttempt()
-        val attempt = PlaybackAttempt(
-            id = ++nextPlaybackAttemptId,
-            channelIndex = channelIndex,
-            stage = stage,
-            startedAt = SystemClock.elapsedRealtime(),
-        )
-        playbackAttempt = attempt
-        uiHandler.postDelayed(playbackTimeoutRunnable, timeoutMs)
-        Log.i(
-            TAG,
-            "Playback attempt started: id=${attempt.id}, " +
-                "channel=${TvCatalog.flatChannels[channelIndex].siteName}, " +
-                "stage=$stage, timeout=${timeoutMs}ms",
-        )
-        return attempt
+        val channel = TvCatalog.flatChannels[attempt.channelIndex]
+        when (attempt.mode) {
+            PlaybackCoordinator.LoadMode.IN_PAGE -> {
+                if (!browserEngine.switchChannel(channel, attempt.requestId)) {
+                    playbackCoordinator.onInPageCommandRejected(attempt.attemptId)?.let {
+                        executePlaybackAttempt(it)
+                    }
+                    return
+                }
+                Log.i(
+                    TAG,
+                    "Requested in-page channel switch: ${channel.siteName}, " +
+                        "request=${attempt.requestId}, stage=${attempt.stage}",
+                )
+            }
+            PlaybackCoordinator.LoadMode.DIRECT -> {
+                browserEngine.loadChannel(channel, attempt.requestId)
+                Log.i(
+                    TAG,
+                    "Direct channel page load: ${channel.siteName}, pid=${channel.pid}, " +
+                        "stage=${attempt.stage}, attempt=${attempt.attemptId}",
+                )
+            }
+        }
     }
 
     private fun cancelPlaybackAttempt() {
         uiHandler.removeCallbacks(playbackTimeoutRunnable)
-        playbackAttempt = null
-        waitingPlaybackRequestId = null
+        scheduledPlaybackAttemptId = null
+        if (::playbackCoordinator.isInitialized) playbackCoordinator.cancel()
     }
 
-    private fun handlePlaybackTimeout() {
-        val attempt = playbackAttempt ?: return
-        val channel = TvCatalog.flatChannels[attempt.channelIndex]
+    private fun handlePlaybackTimeout(attemptId: Long) {
+        scheduledPlaybackAttemptId = null
+        val result = playbackCoordinator.onTimeout(attemptId)
         Log.w(
             TAG,
-            "Playback timeout: id=${attempt.id}, channel=${channel.siteName}, " +
-                "stage=${attempt.stage}, elapsed=${SystemClock.elapsedRealtime() - attempt.startedAt}ms",
+            "Playback timeout: attempt=$attemptId, result=$result",
         )
-        when (attempt.stage) {
-            PlaybackStage.IN_PAGE -> {
-                // 页内播放器可能进入无法恢复的媒体建链状态；只重载一次目标频道官网页面。
-                startDirectLoad(attempt.channelIndex, PlaybackStage.DIRECT)
+        when (result) {
+            is PlaybackCoordinator.TimeoutResult.Retry -> {
+                if (result.attempt.stage == PlaybackCoordinator.Stage.DIRECT_RETRY) {
+                    Toast.makeText(this, R.string.channel_timeout_retry, Toast.LENGTH_SHORT).show()
+                }
+                executePlaybackAttempt(result.attempt)
             }
-
-            PlaybackStage.DIRECT -> {
-                Toast.makeText(this, R.string.channel_timeout_retry, Toast.LENGTH_SHORT).show()
-                startDirectLoad(attempt.channelIndex, PlaybackStage.DIRECT_RETRY)
-            }
-
-            PlaybackStage.DIRECT_RETRY -> {
-                val fallbackIndex = fallbackChannelIndex(attempt.channelIndex)
-                if (fallbackIndex == attempt.channelIndex) {
-                    stopAutomaticRecovery()
-                } else {
-                    val fallback = TvCatalog.flatChannels[fallbackIndex]
+            is PlaybackCoordinator.TimeoutResult.Fallback -> {
+                val fallback = TvCatalog.flatChannels[result.attempt.channelIndex]
                     Toast.makeText(
                         this,
                         getString(R.string.channel_timeout_fallback, fallback.name),
                         Toast.LENGTH_SHORT,
                     ).show()
                     showChannelName(fallback.name)
-                    startDirectLoad(fallbackIndex, PlaybackStage.FALLBACK)
-                }
+                executePlaybackAttempt(result.attempt)
             }
-
-            PlaybackStage.FALLBACK -> stopAutomaticRecovery()
+            PlaybackCoordinator.TimeoutResult.Exhausted -> stopAutomaticRecovery()
+            PlaybackCoordinator.TimeoutResult.Stale -> Unit
         }
-    }
-
-    private fun fallbackChannelIndex(failedIndex: Int): Int {
-        if (lastSuccessfulChannelIndex != failedIndex) return lastSuccessfulChannelIndex
-        val stableIndex = TvCatalog.indexOfSiteName(STABLE_FALLBACK_SITE_NAME)
-        if (stableIndex in TvCatalog.flatChannels.indices && stableIndex != failedIndex) {
-            return stableIndex
-        }
-        val secondaryIndex = TvCatalog.indexOfSiteName(SECONDARY_FALLBACK_SITE_NAME)
-        return if (secondaryIndex in TvCatalog.flatChannels.indices) secondaryIndex else failedIndex
     }
 
     private fun stopAutomaticRecovery() {
@@ -1056,12 +513,6 @@ class MainActivity : AppCompatActivity() {
             .apply()
     }
 
-    private fun restoreVideoEnhancement(): VideoEnhancement =
-        VideoEnhancement.fromWireValue(prefs.getString(KEY_VIDEO_ENHANCEMENT, null))
-
-    private fun restoreChannelSwitchReversed(): Boolean =
-        prefs.getBoolean(KEY_CHANNEL_SWITCH_REVERSED, false)
-
     private fun startupElapsed(): Long = SystemClock.elapsedRealtime() - activityStartedAt
 
     /** 在屏幕角落短暂显示频道名，便于确认当前台。 */
@@ -1083,801 +534,6 @@ class MainActivity : AppCompatActivity() {
     }
     // endregion
 
-    // region 侧边频道菜单
-    /** 初始化左右两个列表：左=分类，右=当前分类下的频道。只建一次。 */
-    private fun setupMenu() {
-        if (menuInitialized) return
-        menuInitialized = true
-        categoryAdapter = MenuAdapter(
-            itemLayoutRes = R.layout.item_category,
-        ) { position -> onCategoryChosen(position) }
-
-        channelAdapter = MenuAdapter(
-            itemLayoutRes = R.layout.item_channel,
-        ) { position -> onChannelChosen(position) }
-
-        binding.categoryList.layoutManager = LinearLayoutManager(this)
-        binding.categoryList.adapter = categoryAdapter
-        // 遥控器长按会快速刷新旧/新选中行；关闭默认交叉淡变，避免高亮看起来闪烁。
-        binding.categoryList.itemAnimator = null
-        binding.channelList.layoutManager = LinearLayoutManager(this)
-        binding.channelList.adapter = channelAdapter
-        binding.channelList.itemAnimator = null
-        programGuideAdapter = ProgramGuideAdapter { position ->
-            schedulePanelAutoClose()
-            focusColumn(COLUMN_PROGRAM_GUIDE)
-            programGuideAdapter.setSelected(position)
-            showReplayUnsupported()
-        }
-        binding.programGuideList.layoutManager = LinearLayoutManager(this)
-        binding.programGuideList.adapter = programGuideAdapter
-        binding.programGuideList.itemAnimator = null
-
-        categoryAdapter.submit(TvCatalog.categories.map { it.name }, keepIndex = 0)
-    }
-
-    /** 呼出菜单：把左右两列定位到「当前正在播放的频道」，右列聚焦，视频保持播放。 */
-    private fun openMenu() {
-        if (menuVisible) return
-        cancelPendingSingleTap()
-        hideTouchControls()
-        hideTouchAdjustment()
-        closeSettings()
-        setupMenu()
-        menuVisible = true
-
-        val (catIndex, chIndex) = TvCatalog.locate(currentChannelIndex)
-        menuCategoryIndex = catIndex
-        activeColumn = COLUMN_CHANNEL
-
-        categoryAdapter.setSelected(catIndex)
-        channelAdapter.submit(
-            TvCatalog.categories[catIndex].channels.map { it.name },
-            keepIndex = chIndex,
-        )
-        syncColumnActive()
-
-        binding.menuPanel.visibility = View.VISIBLE
-        binding.categoryList.scrollToPosition(catIndex)
-        binding.channelList.scrollToPosition(chIndex)
-        scheduleSelectedProgramGuideLoad()
-        uiHandler.removeCallbacks(refreshProgramGuideClockRunnable)
-        uiHandler.postDelayed(refreshProgramGuideClockRunnable, PROGRAM_GUIDE_CLOCK_REFRESH_MS)
-        schedulePanelAutoClose()
-    }
-
-    /** 关闭菜单。视频一直在后面播放，这里只是收起浮层。 */
-    private fun closeMenu() {
-        if (!menuVisible) return
-        menuVisible = false
-        selectedProgramGuidePid = null
-        selectedProgramGuideDate = null
-        uiHandler.removeCallbacks(loadProgramGuideRunnable)
-        uiHandler.removeCallbacks(refreshProgramGuideClockRunnable)
-        binding.menuPanel.visibility = View.GONE
-        if (!settingsVisible) cancelPanelAutoClose()
-        window.decorView.post { maybeShowPendingUpdate() }
-    }
-
-    /** 菜单展开态下的按键：上下在活动列内移动，左右切列，OK 选中，返回关闭。 */
-    private fun handleMenuKeyDown(keyCode: Int) {
-        schedulePanelAutoClose()
-        when (keyCode) {
-            KeyEvent.KEYCODE_BACK -> closeMenu()
-            KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_SETTINGS,
-            KeyEvent.KEYCODE_TV_CONTENTS_MENU -> {
-                closeMenu()
-                openSettings()
-            }
-            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> {
-                if (moveSelection(-1)) playMenuSound(SoundEffectConstants.NAVIGATION_UP)
-            }
-            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> {
-                if (moveSelection(+1)) playMenuSound(SoundEffectConstants.NAVIGATION_DOWN)
-            }
-            KeyEvent.KEYCODE_DPAD_LEFT -> {
-                val target = when (activeColumn) {
-                    COLUMN_PROGRAM_GUIDE -> COLUMN_CHANNEL
-                    COLUMN_CHANNEL -> COLUMN_CATEGORY
-                    else -> COLUMN_CATEGORY
-                }
-                if (focusColumn(target)) {
-                    playMenuSound(SoundEffectConstants.NAVIGATION_LEFT)
-                }
-            }
-            KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                val target = when (activeColumn) {
-                    COLUMN_CATEGORY -> COLUMN_CHANNEL
-                    COLUMN_CHANNEL -> if (programGuideAdapter.itemCount > 0) {
-                        COLUMN_PROGRAM_GUIDE
-                    } else {
-                        COLUMN_CHANNEL
-                    }
-                    else -> COLUMN_PROGRAM_GUIDE
-                }
-                if (focusColumn(target)) {
-                    playMenuSound(SoundEffectConstants.NAVIGATION_RIGHT)
-                }
-            }
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                if (confirmMenuSelection()) playMenuSound(SoundEffectConstants.CLICK)
-            }
-        }
-    }
-
-    /** 在当前活动列内上下移动选择（不循环，卡在首尾）；返回选中项是否实际变化。 */
-    private fun moveSelection(delta: Int): Boolean {
-        if (activeColumn == COLUMN_CATEGORY) {
-            val size = TvCatalog.categories.size
-            val next = (categoryAdapter.selectedIndex + delta).coerceIn(0, size - 1)
-            if (next == categoryAdapter.selectedIndex) return false
-            categoryAdapter.setSelected(next)
-            binding.categoryList.scrollToPosition(next)
-            // 左列移动即预览：右列实时换成该分类的频道（默认选第一个），但不加载、不切台
-            previewCategory(next)
-        } else if (activeColumn == COLUMN_CHANNEL) {
-            val size = TvCatalog.categories[menuCategoryIndex].channels.size
-            val next = (channelAdapter.selectedIndex + delta).coerceIn(0, size - 1)
-            if (next == channelAdapter.selectedIndex) return false
-            channelAdapter.setSelected(next)
-            binding.channelList.scrollToPosition(next)
-            scheduleSelectedProgramGuideLoad()
-        } else {
-            val size = programGuideAdapter.itemCount
-            if (size == 0) return false
-            val next = (programGuideAdapter.selectedIndex + delta).coerceIn(0, size - 1)
-            if (next == programGuideAdapter.selectedIndex) return false
-            programGuideAdapter.setSelected(next)
-            binding.programGuideList.scrollToPosition(next)
-        }
-        return true
-    }
-
-    /** 切换活动列（左/右），刷新两列高亮；返回活动列是否实际变化。 */
-    private fun focusColumn(column: Int): Boolean {
-        if (activeColumn == column) return false
-        activeColumn = column
-        syncColumnActive()
-        return true
-    }
-
-    /** 左列移动时把右列换成对应分类的频道预览（选中第一个），不影响正在播放的画面。 */
-    private fun previewCategory(categoryIndex: Int) {
-        menuCategoryIndex = categoryIndex
-        channelAdapter.submit(
-            TvCatalog.categories[categoryIndex].channels.map { it.name },
-            keepIndex = 0,
-        )
-        binding.channelList.scrollToPosition(0)
-        scheduleSelectedProgramGuideLoad()
-    }
-
-    /** OK：在分类列进入频道列，在频道列选中换台；节目单列只用于浏览。 */
-    private fun confirmMenuSelection(): Boolean {
-        return when (activeColumn) {
-            COLUMN_CATEGORY -> focusColumn(COLUMN_CHANNEL)
-            COLUMN_CHANNEL -> {
-                onChannelChosen(channelAdapter.selectedIndex)
-                true
-            }
-            COLUMN_PROGRAM_GUIDE -> {
-                showReplayUnsupported()
-                true
-            }
-            else -> false
-        }
-    }
-
-    private fun showReplayUnsupported() {
-        val now = SystemClock.elapsedRealtime()
-        if (now - replayUnsupportedToastShownAt < REPLAY_UNSUPPORTED_TOAST_THROTTLE_MS) return
-        replayUnsupportedToastShownAt = now
-        replayUnsupportedToast?.cancel()
-        replayUnsupportedToast = Toast.makeText(
-            this,
-            R.string.program_guide_replay_unsupported,
-            Toast.LENGTH_SHORT,
-        ).also(Toast::show)
-    }
-
-    /** 播放设备系统提供的菜单操作音，并自动遵循系统的按键音效设置。 */
-    private fun playMenuSound(soundConstant: Int) {
-        binding.menuPanel.playSoundEffect(soundConstant)
-    }
-
-    /** 触屏点击分类：切换预览分类并把焦点移到频道列。 */
-    private fun onCategoryChosen(position: Int) {
-        schedulePanelAutoClose()
-        categoryAdapter.setSelected(position)
-        previewCategory(position)
-        focusColumn(COLUMN_CHANNEL)
-    }
-
-    /** 选定某个频道：换算成一维下标、关闭菜单并加载。 */
-    private fun onChannelChosen(position: Int) {
-        cancelPanelAutoClose()
-        cancelPendingSingleTap()
-        val flatIndex = TvCatalog.flatIndexOf(menuCategoryIndex, position)
-        closeMenu()
-        if (flatIndex != currentChannelIndex) {
-            currentChannelIndex = flatIndex
-            loadCurrentChannel()
-        }
-    }
-
-    /** 依据 activeColumn 刷新两列高亮：活动列高亮蓝、非活动列暗选中态。 */
-    private fun syncColumnActive() {
-        categoryAdapter.setColumnActive(activeColumn == COLUMN_CATEGORY)
-        channelAdapter.setColumnActive(activeColumn == COLUMN_CHANNEL)
-        programGuideAdapter.setColumnActive(activeColumn == COLUMN_PROGRAM_GUIDE)
-    }
-
-    /** 停稳后才请求，避免遥控器快速划过频道时产生一串无用网络请求。 */
-    private fun scheduleSelectedProgramGuideLoad() {
-        if (!menuVisible) return
-        val channel = TvCatalog.categories[menuCategoryIndex]
-            .channels.getOrNull(channelAdapter.selectedIndex) ?: return
-        selectedProgramGuidePid = channel.pid
-        selectedProgramGuideDate = ProgramGuideRepository.today()
-        // 防抖期间先隐藏旧频道内容，但不提前显示“正在加载”。loadToday 会同步检查
-        // 内存/磁盘缓存，只有确认无缓存并准备发起网络请求时才返回 Loading。
-        binding.programGuideList.visibility = View.INVISIBLE
-        binding.programGuideStatus.visibility = View.GONE
-        programGuideAdapter.submit(emptyList())
-        uiHandler.removeCallbacks(loadProgramGuideRunnable)
-        uiHandler.postDelayed(loadProgramGuideRunnable, PROGRAM_GUIDE_LOAD_DEBOUNCE_MS)
-    }
-
-    private fun loadSelectedProgramGuide() {
-        if (!menuVisible) return
-        val channel = TvCatalog.categories[menuCategoryIndex]
-            .channels.getOrNull(channelAdapter.selectedIndex) ?: return
-        val pid = channel.pid
-        if (selectedProgramGuidePid != pid) return
-        programGuideRepository.loadToday(pid) { result ->
-            if (!menuVisible || selectedProgramGuidePid != pid) return@loadToday
-            when (result) {
-                ProgramGuideRepository.Result.Loading -> showProgramGuideStatus(
-                    R.string.program_guide_loading,
-                )
-                is ProgramGuideRepository.Result.Data -> showProgramGuide(result.guide)
-                is ProgramGuideRepository.Result.Error -> if (!result.hasCachedData) {
-                    showProgramGuideStatus(R.string.program_guide_failed)
-                }
-            }
-        }
-    }
-
-    private fun showProgramGuide(guide: ProgramGuide) {
-        if (guide.items.isEmpty()) {
-            showProgramGuideStatus(R.string.program_guide_empty)
-            return
-        }
-        val revealAfterPositioning = binding.programGuideList.visibility != View.VISIBLE
-        binding.programGuideStatus.visibility = View.GONE
-        if (revealAfterPositioning) {
-            // INVISIBLE 仍会参与测量和布局，但不会把尚未定位的列表绘制出来。
-            binding.programGuideList.visibility = View.INVISIBLE
-        }
-        val currentIndex = programGuideAdapter.submit(guide.items)
-        scrollProgramGuideToOneThird(
-            position = currentIndex.coerceAtLeast(0),
-            revealAfterPositioning = revealAfterPositioning,
-        )
-        syncColumnActive()
-    }
-
-    /** 把当前节目行的中心稳定放在列表垂直方向从顶部向下三分之一处。 */
-    private fun scrollProgramGuideToOneThird(
-        position: Int,
-        revealAfterPositioning: Boolean = false,
-    ) {
-        binding.programGuideList.post {
-            if (!menuVisible || position !in 0 until programGuideAdapter.itemCount) return@post
-            val layoutManager = binding.programGuideList.layoutManager as? LinearLayoutManager
-                ?: return@post
-            val itemHeight = 52f.dp().roundToInt()
-            val targetOffset = (binding.programGuideList.height / 3 - itemHeight / 2)
-                .coerceAtLeast(binding.programGuideList.paddingTop)
-            layoutManager.scrollToPositionWithOffset(position, targetOffset)
-            if (revealAfterPositioning) {
-                binding.programGuideList.visibility = View.VISIBLE
-            }
-        }
-    }
-
-    private fun showProgramGuideStatus(messageRes: Int) {
-        programGuideAdapter.submit(emptyList())
-        if (activeColumn == COLUMN_PROGRAM_GUIDE) focusColumn(COLUMN_CHANNEL)
-        binding.programGuideList.visibility = View.GONE
-        binding.programGuideStatus.apply {
-            visibility = View.VISIBLE
-            setText(messageRes)
-        }
-    }
-    // endregion
-
-    // region 右侧系统设置面板
-    private fun setupSettings() {
-        if (settingsInitialized) return
-        settingsInitialized = true
-        settingsCategoryAdapter = MenuAdapter(R.layout.item_category) {
-            settingsCategoryAdapter.setSelected(it)
-            updateSettingsValuesForSelectedCategory()
-            if (selectedSettingsItem().hasSelectableValues()) {
-                focusSettingsColumn(COLUMN_SETTING_VALUE)
-            }
-        }
-        settingsValueAdapter = MenuAdapter(R.layout.item_channel) { position ->
-            selectSettingsValue(position)
-        }
-        binding.settingsCategoryList.layoutManager = LinearLayoutManager(this)
-        binding.settingsCategoryList.adapter = settingsCategoryAdapter
-        binding.settingsCategoryList.itemAnimator = null
-        binding.settingsValueList.layoutManager = LinearLayoutManager(this)
-        binding.settingsValueList.adapter = settingsValueAdapter
-        binding.settingsValueList.itemAnimator = null
-        settingsCategoryAdapter.submit(
-            availableSettingsItems.map { getString(it.titleRes) },
-            keepIndex = 0,
-        )
-    }
-
-    /** MENU 键呼出：定位到当前已生效档位，视频继续在面板后方播放。 */
-    private fun openSettings() {
-        if (settingsVisible) return
-        cancelPendingSingleTap()
-        hideTouchControls()
-        hideTouchAdjustment()
-        closeMenu()
-        setupSettings()
-        settingsVisible = true
-        settingsActiveColumn = COLUMN_SETTING_CATEGORY
-        settingsCategoryAdapter.setSelected(0)
-        updateSettingsValuesForSelectedCategory()
-        syncSettingsColumnActive()
-        binding.settingsPanel.visibility = View.VISIBLE
-        binding.settingsCategoryList.scrollToPosition(settingsCategoryAdapter.selectedIndex)
-        binding.settingsValueList.scrollToPosition(settingsValueAdapter.selectedIndex)
-        schedulePanelAutoClose()
-    }
-
-    private fun closeSettings() {
-        if (!settingsVisible) return
-        settingsVisible = false
-        binding.settingsPanel.visibility = View.GONE
-        if (!menuVisible) cancelPanelAutoClose()
-        window.decorView.post { maybeShowPendingUpdate() }
-    }
-
-    private fun handleSettingsKeyDown(keyCode: Int) {
-        schedulePanelAutoClose()
-        when (keyCode) {
-            KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_SETTINGS,
-            KeyEvent.KEYCODE_TV_CONTENTS_MENU -> closeSettings()
-            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> {
-                if (moveSettingsSelection(-1)) playSettingsSound(SoundEffectConstants.NAVIGATION_UP)
-            }
-            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> {
-                if (moveSettingsSelection(+1)) {
-                    playSettingsSound(SoundEffectConstants.NAVIGATION_DOWN)
-                }
-            }
-            KeyEvent.KEYCODE_DPAD_LEFT -> {
-                if (
-                    selectedSettingsItem().hasSelectableValues() &&
-                    focusSettingsColumn(COLUMN_SETTING_VALUE)
-                ) {
-                    playSettingsSound(SoundEffectConstants.NAVIGATION_LEFT)
-                }
-            }
-            KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                if (focusSettingsColumn(COLUMN_SETTING_CATEGORY)) {
-                    playSettingsSound(SoundEffectConstants.NAVIGATION_RIGHT)
-                }
-            }
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                if (settingsActiveColumn == COLUMN_SETTING_CATEGORY) {
-                    if (selectedSettingsItem().hasSelectableValues()) {
-                        focusSettingsColumn(COLUMN_SETTING_VALUE)
-                    }
-                } else {
-                    selectSettingsValue(settingsValueAdapter.selectedIndex)
-                }
-                playSettingsSound(SoundEffectConstants.CLICK)
-            }
-        }
-    }
-
-    private fun moveSettingsSelection(delta: Int): Boolean {
-        if (settingsActiveColumn == COLUMN_SETTING_CATEGORY) {
-            val next = (settingsCategoryAdapter.selectedIndex + delta)
-                .coerceIn(0, availableSettingsItems.lastIndex)
-            if (next == settingsCategoryAdapter.selectedIndex) return false
-            settingsCategoryAdapter.setSelected(next)
-            binding.settingsCategoryList.scrollToPosition(next)
-            updateSettingsValuesForSelectedCategory()
-        } else {
-            if (!selectedSettingsItem().hasSelectableValues()) return false
-            val maxIndex = settingsValueMaxIndex()
-            val next = (settingsValueAdapter.selectedIndex + delta).coerceIn(0, maxIndex)
-            if (next == settingsValueAdapter.selectedIndex) return false
-            settingsValueAdapter.setSelected(next)
-            binding.settingsValueList.scrollToPosition(next)
-        }
-        return true
-    }
-
-    private fun focusSettingsColumn(column: Int): Boolean {
-        if (column == COLUMN_SETTING_VALUE && !selectedSettingsItem().hasSelectableValues()) {
-            return false
-        }
-        if (settingsActiveColumn == column) return false
-        settingsActiveColumn = column
-        syncSettingsColumnActive()
-        return true
-    }
-
-    private fun syncSettingsColumnActive() {
-        settingsCategoryAdapter.setColumnActive(settingsActiveColumn == COLUMN_SETTING_CATEGORY)
-        settingsValueAdapter.setColumnActive(settingsActiveColumn == COLUMN_SETTING_VALUE)
-    }
-
-    private fun updateSettingsValuesForSelectedCategory() {
-        val selectedItem = selectedSettingsItem()
-        when (selectedItem) {
-            SettingsItem.VIDEO_ENHANCEMENT -> {
-                val selectedValueIndex = VideoEnhancement.entries.indexOf(videoEnhancement)
-                binding.settingsAboutText.visibility = View.GONE
-                binding.settingsValueList.visibility = View.VISIBLE
-                settingsValueAdapter.submit(videoEnhancementLabels(), keepIndex = selectedValueIndex)
-                settingsValueAdapter.setColumnActive(settingsActiveColumn == COLUMN_SETTING_VALUE)
-                binding.settingsValueList.scrollToPosition(selectedValueIndex)
-            }
-            SettingsItem.CHANNEL_SWITCH_REVERSE -> {
-                val selectedValueIndex = if (channelSwitchReversed) 1 else 0
-                binding.settingsAboutText.visibility = View.GONE
-                binding.settingsValueList.visibility = View.VISIBLE
-                settingsValueAdapter.submit(
-                    channelSwitchReverseLabels(),
-                    keepIndex = selectedValueIndex,
-                )
-                settingsValueAdapter.setColumnActive(settingsActiveColumn == COLUMN_SETTING_VALUE)
-                binding.settingsValueList.scrollToPosition(selectedValueIndex)
-            }
-            SettingsItem.CHECK_UPDATE -> {
-                binding.settingsAboutText.visibility = View.GONE
-                binding.settingsValueList.visibility = View.VISIBLE
-                settingsValueAdapter.submit(
-                    listOf(getString(R.string.setting_check_update_now)),
-                    keepIndex = 0,
-                )
-                settingsValueAdapter.setColumnActive(settingsActiveColumn == COLUMN_SETTING_VALUE)
-                binding.settingsValueList.scrollToPosition(0)
-            }
-            SettingsItem.ABOUT -> {
-                settingsActiveColumn = COLUMN_SETTING_CATEGORY
-                binding.settingsValueList.visibility = View.GONE
-                binding.settingsAboutText.text = aboutText()
-                binding.settingsAboutText.visibility = View.VISIBLE
-                settingsValueAdapter.submit(emptyList(), keepIndex = 0)
-                syncSettingsColumnActive()
-            }
-        }
-    }
-
-    private fun settingsValueMaxIndex(): Int = when (selectedSettingsItem()) {
-        SettingsItem.VIDEO_ENHANCEMENT -> VideoEnhancement.entries.lastIndex
-        SettingsItem.CHANNEL_SWITCH_REVERSE -> 1
-        SettingsItem.CHECK_UPDATE -> 0
-        SettingsItem.ABOUT -> 0
-    }
-
-    private fun selectedSettingsItem(): SettingsItem =
-        availableSettingsItems.getOrElse(settingsCategoryAdapter.selectedIndex) {
-            SettingsItem.VIDEO_ENHANCEMENT
-        }
-
-    private fun selectSettingsValue(position: Int) {
-        when (selectedSettingsItem()) {
-            SettingsItem.VIDEO_ENHANCEMENT -> selectVideoEnhancement(position)
-            SettingsItem.CHANNEL_SWITCH_REVERSE -> selectChannelSwitchReverse(position)
-            SettingsItem.CHECK_UPDATE -> performManualUpdateCheck()
-            SettingsItem.ABOUT -> Unit
-        }
-    }
-
-    private fun selectVideoEnhancement(position: Int) {
-        schedulePanelAutoClose()
-        cancelPendingSingleTap()
-        val selected = VideoEnhancement.entries.getOrNull(position) ?: return
-        videoEnhancement = selected
-        prefs.edit().putString(KEY_VIDEO_ENHANCEMENT, selected.wireValue).apply()
-        settingsValueAdapter.submit(videoEnhancementLabels(), keepIndex = position)
-        settingsValueAdapter.setColumnActive(settingsActiveColumn == COLUMN_SETTING_VALUE)
-        browserEngine.applyVideoEnhancement(selected)
-    }
-
-    private fun videoEnhancementLabels(): List<String> = VideoEnhancement.entries.map { level ->
-        getString(level.labelRes) + if (level == videoEnhancement) "  ✓" else ""
-    }
-
-    private fun selectChannelSwitchReverse(position: Int) {
-        schedulePanelAutoClose()
-        cancelPendingSingleTap()
-        channelSwitchReversed = position == 1
-        prefs.edit().putBoolean(KEY_CHANNEL_SWITCH_REVERSED, channelSwitchReversed).apply()
-        settingsValueAdapter.submit(channelSwitchReverseLabels(), keepIndex = position)
-        settingsValueAdapter.setColumnActive(settingsActiveColumn == COLUMN_SETTING_VALUE)
-    }
-
-    private fun channelSwitchReverseLabels(): List<String> = listOf(
-        getString(R.string.setting_off) + if (!channelSwitchReversed) "  ✓" else "",
-        getString(R.string.setting_on) + if (channelSwitchReversed) "  ✓" else "",
-    )
-
-    private fun aboutText(): String = listOf(
-        getString(R.string.about_developer),
-        getString(R.string.about_engine, getString(R.string.browser_engine_name)),
-        getString(R.string.about_version, packageVersionName(), packageVersionCode()),
-    ).joinToString(separator = "\n")
-
-    private fun SettingsItem.hasSelectableValues(): Boolean = when (this) {
-        SettingsItem.VIDEO_ENHANCEMENT,
-        SettingsItem.CHANNEL_SWITCH_REVERSE,
-        SettingsItem.CHECK_UPDATE -> true
-        SettingsItem.ABOUT -> false
-    }
-
-    private fun packageVersionName(): String {
-        val packageInfo = packageManager.getPackageInfo(packageName, 0)
-        return packageInfo.versionName ?: getString(R.string.about_version_unknown)
-    }
-
-    private fun packageVersionCode(): Long {
-        val packageInfo = packageManager.getPackageInfo(packageName, 0)
-        return packageInfo.longVersionCode
-    }
-
-    private fun playSettingsSound(soundConstant: Int) {
-        binding.settingsPanel.playSoundEffect(soundConstant)
-    }
-    // endregion
-
-    // region 应用更新
-    private fun startAutomaticUpdateCheck() {
-        if (!BuildConfig.APP_UPDATES_ENABLED) return
-        if (automaticUpdateCheckStarted || isFinishing || isDestroyed) return
-        automaticUpdateCheckStarted = true
-        uiHandler.removeCallbacks(automaticUpdateCheckRunnable)
-        if (updateCheckInProgress) return
-        updateCheckInProgress = true
-        activeUpdateCheckIsManual = false
-        updateManager.check(manual = false) { result ->
-            updateCheckInProgress = false
-            activeUpdateCheckIsManual = false
-            if (manualUpdateCheckQueued) {
-                manualUpdateCheckQueued = false
-                performManualUpdateCheck()
-            } else {
-                handleAutomaticUpdateResult(result)
-            }
-        }
-    }
-
-    private fun handleAutomaticUpdateResult(result: AppUpdateManager.CheckResult) {
-        if (isFinishing || isDestroyed) return
-        when (result) {
-            is AppUpdateManager.CheckResult.Available -> {
-                pendingUpdate = result
-                maybeShowPendingUpdate()
-            }
-            AppUpdateManager.CheckResult.UpToDate -> {
-                Log.i(TAG, "Automatic update check: current version is latest")
-            }
-            AppUpdateManager.CheckResult.Skipped -> {
-                Log.i(TAG, "Automatic update check: latest version was skipped")
-            }
-            is AppUpdateManager.CheckResult.Failed -> {
-                Log.w(TAG, "Automatic update check failed: ${result.message}")
-            }
-        }
-    }
-
-    private fun performManualUpdateCheck() {
-        if (!BuildConfig.APP_UPDATES_ENABLED) return
-        if (updateCheckInProgress) {
-            if (!activeUpdateCheckIsManual) manualUpdateCheckQueued = true
-            Toast.makeText(this, R.string.update_checking, Toast.LENGTH_SHORT).show()
-            return
-        }
-        automaticUpdateCheckStarted = true
-        uiHandler.removeCallbacks(automaticUpdateCheckRunnable)
-        updateCheckInProgress = true
-        activeUpdateCheckIsManual = true
-        cancelPanelAutoClose()
-        Toast.makeText(this, R.string.update_checking, Toast.LENGTH_SHORT).show()
-        updateManager.check(manual = true) { result ->
-            updateCheckInProgress = false
-            activeUpdateCheckIsManual = false
-            if (isFinishing || isDestroyed) return@check
-            when (result) {
-                is AppUpdateManager.CheckResult.Available -> {
-                    pendingUpdate = result
-                    closeSettings()
-                    maybeShowPendingUpdate()
-                }
-                AppUpdateManager.CheckResult.UpToDate -> {
-                    Toast.makeText(this, R.string.update_up_to_date, Toast.LENGTH_SHORT).show()
-                    schedulePanelAutoClose()
-                }
-                AppUpdateManager.CheckResult.Skipped -> Unit
-                is AppUpdateManager.CheckResult.Failed -> {
-                    Toast.makeText(
-                        this,
-                        getString(R.string.update_check_failed, result.message),
-                        Toast.LENGTH_LONG,
-                    ).show()
-                    schedulePanelAutoClose()
-                }
-            }
-        }
-    }
-
-    private fun maybeShowPendingUpdate() {
-        val available = pendingUpdate ?: return
-        if (
-            updateDialog?.isShowing == true || menuVisible || settingsVisible ||
-            !window.decorView.hasWindowFocus() || isFinishing || isDestroyed
-        ) {
-            return
-        }
-        pendingUpdate = null
-        showUpdateDialog(available)
-    }
-
-    private fun showUpdateDialog(available: AppUpdateManager.CheckResult.Available) {
-        cancelPendingSingleTap()
-        hideTouchControls()
-        hideTouchAdjustment()
-        val dialog = AlertDialog.Builder(this)
-            .setTitle(getString(R.string.update_dialog_title, available.manifest.versionName))
-            .setMessage(
-                getString(
-                    R.string.update_dialog_message,
-                    packageVersionName(),
-                    available.manifest.versionName,
-                    available.manifest.releaseNotes,
-                ),
-            )
-            .setNegativeButton(R.string.update_skip_version) { _, _ ->
-                updateManager.skipVersion(available.manifest.versionCode)
-                Toast.makeText(
-                    this,
-                    getString(R.string.update_skipped, available.manifest.versionName),
-                    Toast.LENGTH_SHORT,
-                ).show()
-            }
-            .setPositiveButton(R.string.update_now) { _, _ ->
-                startUpdateDownload(available)
-            }
-            .setOnDismissListener { updateDialog = null }
-            .create()
-        updateDialog = dialog
-        dialog.setOnShowListener { dialog.getButton(AlertDialog.BUTTON_POSITIVE).requestFocus() }
-        dialog.show()
-    }
-
-    private fun startUpdateDownload(available: AppUpdateManager.CheckResult.Available) {
-        when (val result = updateManager.enqueue(available.manifest, available.asset)) {
-            is AppUpdateManager.EnqueueResult.Started -> {
-                Toast.makeText(
-                    this,
-                    getString(R.string.update_downloading, available.manifest.versionName),
-                    Toast.LENGTH_LONG,
-                ).show()
-            }
-            AppUpdateManager.EnqueueResult.AlreadyRunning -> {
-                updateManager.allowInstallRetry()
-                updateManager.inspectPending(::handlePendingDownload)
-            }
-            is AppUpdateManager.EnqueueResult.Failed -> {
-                Toast.makeText(
-                    this,
-                    getString(R.string.update_download_failed, result.message),
-                    Toast.LENGTH_LONG,
-                ).show()
-            }
-        }
-    }
-
-    private fun handlePendingDownload(result: AppUpdateManager.PendingResult) {
-        if (isFinishing || isDestroyed) return
-        when (result) {
-            AppUpdateManager.PendingResult.None -> Unit
-            AppUpdateManager.PendingResult.Running -> {
-                Toast.makeText(this, R.string.update_download_running, Toast.LENGTH_SHORT).show()
-            }
-            is AppUpdateManager.PendingResult.Ready -> {
-                if (updateManager.wasInstallPrompted(result.task.downloadId)) return
-                pendingInstall = result
-                maybeInstallPendingUpdate()
-            }
-            is AppUpdateManager.PendingResult.Failed -> {
-                Toast.makeText(
-                    this,
-                    getString(R.string.update_verify_failed, result.message),
-                    Toast.LENGTH_LONG,
-                ).show()
-            }
-        }
-    }
-
-    private fun maybeInstallPendingUpdate() {
-        val ready = pendingInstall ?: return
-        if (!window.decorView.hasWindowFocus() || isFinishing || isDestroyed) return
-        if (!canInstallPackages()) {
-            if (waitingForInstallPermission) return
-            waitingForInstallPermission = true
-            updateManager.markInstallPrompted(ready.task.downloadId)
-            Toast.makeText(
-                this,
-                R.string.update_allow_unknown_sources,
-                Toast.LENGTH_LONG,
-            ).show()
-            launchInstallPermissionSettings()
-            return
-        }
-        launchPackageInstaller(ready)
-    }
-
-    private fun canInstallPackages(): Boolean = packageManager.canRequestPackageInstalls()
-
-    private fun launchInstallPermissionSettings() {
-        val appSpecificIntent = Intent(
-            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-            Uri.parse("package:$packageName"),
-        )
-        try {
-            installPermissionLauncher.launch(appSpecificIntent)
-        } catch (firstError: ActivityNotFoundException) {
-            Log.w(TAG, "App-specific unknown sources settings unavailable", firstError)
-            try {
-                installPermissionLauncher.launch(Intent(Settings.ACTION_SECURITY_SETTINGS))
-            } catch (secondError: ActivityNotFoundException) {
-                waitingForInstallPermission = false
-                pendingInstall = null
-                Toast.makeText(
-                    this,
-                    R.string.update_install_permission_denied,
-                    Toast.LENGTH_LONG,
-                ).show()
-                Log.e(TAG, "No unknown sources settings available", secondError)
-            }
-        }
-    }
-
-    private fun launchPackageInstaller(ready: AppUpdateManager.PendingResult.Ready) {
-        val contentUri = FileProvider.getUriForFile(
-            this,
-            "$packageName.update-files",
-            ready.file,
-        )
-        val intent = Intent(Intent.ACTION_VIEW)
-            .setDataAndType(contentUri, APK_MIME_TYPE)
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        try {
-            updateManager.markInstallPrompted(ready.task.downloadId)
-            pendingInstall = null
-            startActivity(intent)
-        } catch (error: ActivityNotFoundException) {
-            updateManager.allowInstallRetry()
-            Toast.makeText(this, R.string.update_no_installer, Toast.LENGTH_LONG).show()
-            Log.e(TAG, "No package installer available", error)
-        }
-    }
-    // endregion
-
     // region 生命周期
     override fun onPause() {
         super.onPause()
@@ -1888,35 +544,18 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         if (::browserEngine.isInitialized) browserEngine.onResume()
         enableImmersiveFullscreen()
-        if (::updateManager.isInitialized && !pendingDownloadInspected) {
-            pendingDownloadInspected = true
-            updateManager.inspectPending(::handlePendingDownload)
-        }
-        window.decorView.post {
-            maybeShowPendingUpdate()
-            maybeInstallPendingUpdate()
-        }
+        updateController?.onResume()
     }
 
     override fun onDestroy() {
         uiHandler.removeCallbacks(hideChannelNameRunnable)
-        uiHandler.removeCallbacks(hideTouchAdjustmentRunnable)
-        uiHandler.removeCallbacks(hideTouchControlsRunnable)
         uiHandler.removeCallbacks(autoClosePanelRunnable)
-        uiHandler.removeCallbacks(singleTapRunnable)
-        uiHandler.removeCallbacks(automaticUpdateCheckRunnable)
         uiHandler.removeCallbacks(loadChannelRunnable)
-        uiHandler.removeCallbacks(loadProgramGuideRunnable)
-        uiHandler.removeCallbacks(refreshProgramGuideClockRunnable)
         cancelPlaybackAttempt()
-        replayUnsupportedToast?.cancel()
-        replayUnsupportedToast = null
-        updateDialog?.dismiss()
-        if (::updateManager.isInitialized) {
-            unregisterReceiver(downloadCompleteReceiver)
-            updateManager.close()
-        }
-        if (::programGuideRepository.isInitialized) programGuideRepository.close()
+        browserFailureDialog?.dismiss()
+        updateController?.close()
+        channelMenuController.dispose()
+        touchController.dispose()
         if (::browserEngine.isInitialized) browserEngine.destroy()
         super.onDestroy()
     }

@@ -82,19 +82,31 @@ Release 的“检查更新”设置项支持手动检查。发现新版时会展
 
 核心思路：
 
-1. 原生 `MainActivity` 管理全屏、频道状态、遥控器和触屏输入。
+1. 原生 `MainActivity` 只负责生命周期、浏览器承载、播放 effect 执行和顶层输入路由。
 2. 浏览器内核通过 `BrowserEngine` 抽象隔离，分别由 GeckoView 和系统 WebView flavor 实现。
-3. 页面适配脚本 `player_adapter.js` 注入官网页面，负责查找 `<video>`、全屏铺满、换台和播放状态回传。
-4. 原生层收到播放成功事件后隐藏加载遮罩，并持久化最近成功频道。
+3. `BrowserProtocol` 定义版本化原生/页面消息，两个内核共享同一编解码规则。
+4. 页面适配脚本 `player_adapter.js` 注入官网页面，负责查找 `<video>`、全屏铺满、换台和播放状态回传。
+5. `PlaybackCoordinator` 维护换台、超时、重试和回退状态；原生层收到播放成功事件后隐藏加载遮罩，并持久化最近成功频道。
+6. `ChannelMenuController`、`SettingsPanelController`、`PlaybackTouchController` 和
+   `AppUpdateController` 分别封装频道/节目单、系统设置、触屏交互和更新安装流程。
 
 关键文件：
 
 | 文件 | 说明 |
 | --- | --- |
-| `app/src/main/java/com/lipengzhou/webtvlive/MainActivity.kt` | 主交互、频道切换、菜单、设置、触屏手势和恢复逻辑 |
+| `app/src/main/java/com/lipengzhou/webtvlive/MainActivity.kt` | 生命周期、浏览器承载、顶层输入路由与播放 effect 执行 |
 | `app/src/main/java/com/lipengzhou/webtvlive/BrowserEngine.kt` | 双内核共享接口 |
+| `app/src/main/java/com/lipengzhou/webtvlive/BrowserProtocol.kt` | 版本化原生/页面消息协议 |
+| `app/src/main/java/com/lipengzhou/webtvlive/PlaybackCoordinator.kt` | 播放请求、超时、重试和回退状态机 |
+| `app/src/main/java/com/lipengzhou/webtvlive/PanelCoordinator.kt` | 频道菜单与设置面板互斥状态 |
+| `app/src/main/java/com/lipengzhou/webtvlive/TouchGestureInterpreter.kt` | 可单元测试的触屏手势解释 |
+| `app/src/main/java/com/lipengzhou/webtvlive/ChannelMenuController.kt` | 频道分类、节目单加载和三列导航 |
+| `app/src/main/java/com/lipengzhou/webtvlive/SettingsPanelController.kt` | 设置渲染、持久化和遥控器导航 |
+| `app/src/main/java/com/lipengzhou/webtvlive/PlaybackTouchController.kt` | 触屏覆盖层、亮度/音量与单双击编排 |
+| `app/src/main/java/com/lipengzhou/webtvlive/AppUpdateController.kt` | 更新检查、下载恢复、校验和安装交互 |
 | `app/src/gecko/java/com/lipengzhou/webtvlive/FlavorBrowserEngine.kt` | GeckoView 内核实现 |
 | `app/src/webview/java/com/lipengzhou/webtvlive/FlavorBrowserEngine.kt` | 系统 WebView 内核实现 |
+| `app/src/main/assets/webextension/protocol.js` | 页面侧协议定义和命令校验 |
 | `app/src/main/assets/webextension/player_adapter.js` | 页面播放器适配脚本 |
 | `app/src/gecko/assets/webextension/request_filter.js` | GeckoView 请求过滤脚本 |
 | `app/src/main/java/com/lipengzhou/webtvlive/TvCatalog.kt` | 内置频道目录 |
@@ -108,6 +120,10 @@ Release 的“检查更新”设置项支持手动检查。发现新版时会展
 ```bash
 export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ```
+
+源码的 Java/Kotlin 字节码目标为 17。仓库的 `gradle/gradle-daemon-jvm.properties`
+当前固定 Gradle Daemon 使用 Java 25；首次在新环境构建时，Foojay resolver 可能需要
+联网解析或下载匹配的 JDK。执行 `./gradlew -version` 可确认实际 Launcher/Daemon JVM。
 
 项目配置：
 

@@ -9,6 +9,7 @@ import android.util.Log
 import android.view.ViewGroup
 import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -16,6 +17,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import org.json.JSONObject
+import java.util.UUID
 
 class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
 
@@ -23,6 +25,8 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
     private var webView: WebView? = null
     private var listener: BrowserEngine.Listener? = null
     private var adapterScript: String? = null
+    private var protocolScript: String? = null
+    private var bridgeToken = ""
     private var bridgeReady = false
     private var pendingChannelSwitch: PendingChannelSwitch? = null
     private var videoEnhancement = VideoEnhancement.ORIGINAL
@@ -43,6 +47,16 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
     override fun attach(container: ViewGroup, listener: BrowserEngine.Listener) {
         this.listener = listener
         adapterScript = loadAsset("webextension/player_adapter.js")
+        protocolScript = loadAsset("webextension/protocol.js")
+        if (adapterScript == null || protocolScript == null) {
+            reportFailure(
+                BrowserEngine.FailureKind.INITIALIZATION,
+                "WebView 页面适配脚本读取失败",
+                recoverable = true,
+            )
+            return
+        }
+        bridgeToken = UUID.randomUUID().toString()
         WebView.setWebContentsDebuggingEnabled(isDebuggable())
 
         val createdView = WebView(container.context)
@@ -51,9 +65,10 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
         createdView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
-            databaseEnabled = true
             mediaPlaybackRequiresUserGesture = false
-            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            allowFileAccess = false
+            allowContentAccess = false
             loadsImagesAutomatically = true
             useWideViewPort = false
             loadWithOverviewMode = false
@@ -69,12 +84,41 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
         createdView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
                 bridgeReady = false
-                listener.onPageStarted(url)
+                if (!TrustedWebContent.isAllowedMainFrameUrl(url)) {
+                    view.stopLoading()
+                    reportFailure(
+                        BrowserEngine.FailureKind.NAVIGATION_BLOCKED,
+                        "已阻止非受信任页面：$url",
+                        recoverable = false,
+                    )
+                    return
+                }
+                bridgeToken = UUID.randomUUID().toString()
+                listener.onEvent(BrowserEngine.Event.PageStarted(url))
             }
 
             override fun onPageFinished(view: WebView, url: String) {
-                listener.onPageStopped(true)
+                if (!TrustedWebContent.isAllowedMainFrameUrl(url)) return
+                listener.onEvent(BrowserEngine.Event.PageStopped(true))
                 injectAdapter(view)
+            }
+
+            override fun shouldOverrideUrlLoading(
+                view: WebView,
+                request: WebResourceRequest,
+            ): Boolean {
+                if (
+                    !request.isForMainFrame ||
+                    TrustedWebContent.isAllowedMainFrameUrl(request.url.toString())
+                ) {
+                    return false
+                }
+                reportFailure(
+                    BrowserEngine.FailureKind.NAVIGATION_BLOCKED,
+                    "已阻止非受信任页面：${request.url}",
+                    recoverable = false,
+                )
+                return true
             }
 
             override fun onReceivedError(
@@ -83,9 +127,32 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
                 error: android.webkit.WebResourceError,
             ) {
                 if (request.isForMainFrame) {
-                    listener.onPageStopped(false)
-                    listener.onDiagnostic("WebView main-frame error: ${error.description}")
+                    listener.onEvent(BrowserEngine.Event.PageStopped(false))
+                    reportFailure(
+                        BrowserEngine.FailureKind.MAIN_FRAME,
+                        "WebView 主页面加载失败：${error.description}",
+                        recoverable = true,
+                    )
                 }
+            }
+
+            override fun onRenderProcessGone(
+                view: WebView,
+                detail: RenderProcessGoneDetail,
+            ): Boolean {
+                if (webView === view) {
+                    bridgeReady = false
+                    webView = null
+                }
+                view.removeJavascriptInterface(BRIDGE_NAME)
+                (view.parent as? ViewGroup)?.removeView(view)
+                view.destroy()
+                reportFailure(
+                    BrowserEngine.FailureKind.CONTENT_PROCESS,
+                    if (detail.didCrash()) "WebView 渲染进程崩溃" else "WebView 渲染进程被系统终止",
+                    recoverable = true,
+                )
+                return true
             }
 
             override fun shouldInterceptRequest(
@@ -104,7 +171,7 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT,
         )
-        listener.onReady()
+        listener.onEvent(BrowserEngine.Event.Initialized)
     }
 
     override fun canSwitchInPage(): Boolean = bridgeReady
@@ -125,9 +192,7 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
     override fun applyVideoEnhancement(level: VideoEnhancement) {
         videoEnhancement = level
         postMessage(
-            JSONObject()
-                .put("type", "setVideoEnhancement")
-                .put("level", level.wireValue),
+            BrowserProtocol.encode(BrowserProtocol.Command.SetVideoEnhancement(level)),
         )
         Log.i(TAG, "Video enhancement requested: ${level.wireValue}")
     }
@@ -145,6 +210,7 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
     override fun destroy() {
         pendingChannelSwitch = null
         bridgeReady = false
+        bridgeToken = ""
         webView?.parent?.let { parent ->
             if (parent is ViewGroup) parent.removeView(webView)
         }
@@ -156,18 +222,22 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
     }
 
     private fun injectAdapter(view: WebView) {
-        val script = adapterScript ?: return
-        view.evaluateJavascript(WEBVIEW_RUNTIME_SHIM + "\n" + script, null)
+        if (!TrustedWebContent.isAllowedMainFrameUrl(view.url)) return
+        val protocol = protocolScript ?: return
+        val adapter = adapterScript ?: return
+        view.evaluateJavascript(runtimeShim(bridgeToken) + "\n" + protocol + "\n" + adapter, null)
     }
 
     private fun postPendingChannelSwitch() {
         val pending = pendingChannelSwitch ?: return
         postMessage(
-            JSONObject()
-                .put("type", "switchChannel")
-                .put("channel", pending.channel.siteName)
-                .put("pid", pending.channel.pid)
-                .put("requestId", pending.requestId),
+            BrowserProtocol.encode(
+                BrowserProtocol.Command.SwitchChannel(
+                    channel = pending.channel.siteName,
+                    pid = pending.channel.pid,
+                    requestId = pending.requestId,
+                ),
+            ),
         )
         pendingChannelSwitch = null
     }
@@ -180,24 +250,59 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
     }
 
     private fun handleBridgeMessage(raw: String?) {
+        if (raw == null || raw.toByteArray(Charsets.UTF_8).size > BrowserProtocol.MAX_EVENT_BYTES) {
+            reportFailure(
+                BrowserEngine.FailureKind.PROTOCOL,
+                "已忽略过大的 WebView 页面消息",
+                recoverable = false,
+            )
+            return
+        }
         val payload = raw?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return
-        when (payload.optString("type")) {
-            "ready" -> {
-                bridgeReady = true
-                applyVideoEnhancement(videoEnhancement)
-                postPendingChannelSwitch()
-            }
+        if (payload.optString(KEY_BRIDGE_TOKEN) != bridgeToken ||
+            !TrustedWebContent.isAllowedMainFrameUrl(webView?.url)
+        ) {
+            reportFailure(
+                BrowserEngine.FailureKind.PROTOCOL,
+                "已忽略来源或令牌无效的 WebView 页面消息",
+                recoverable = false,
+            )
+            return
+        }
+        payload.remove(KEY_BRIDGE_TOKEN)
+        when (val decoded = BrowserProtocol.decodeEvent(payload)) {
+            is BrowserProtocol.DecodeResult.Invalid -> reportFailure(
+                BrowserEngine.FailureKind.PROTOCOL,
+                decoded.reason,
+                recoverable = false,
+            )
 
-            "playing" -> listener?.onPlaybackReady(payload.optLong("requestId", -1L))
-            "channelSelected" -> listener?.onChannelSelected(payload.optString("channel"))
-            "channelNotFound" -> listener?.onChannelNotFound(payload.optString("channel"))
-            "diagnostic" -> {
-                val message = payload.optString("message").ifBlank {
-                    payload.optString("detail")
+            is BrowserProtocol.DecodeResult.Success -> when (val event = decoded.event) {
+                BrowserProtocol.PageEvent.Ready -> {
+                    bridgeReady = true
+                    applyVideoEnhancement(videoEnhancement)
+                    postPendingChannelSwitch()
                 }
-                listener?.onDiagnostic(message)
+
+                is BrowserProtocol.PageEvent.Playing -> listener?.onEvent(
+                    BrowserEngine.Event.PlaybackReady(event.requestId),
+                )
+                is BrowserProtocol.PageEvent.ChannelSelected -> listener?.onEvent(
+                    BrowserEngine.Event.ChannelSelected(event.channel),
+                )
+                is BrowserProtocol.PageEvent.Diagnostic -> listener?.onEvent(
+                    BrowserEngine.Event.Diagnostic(event.message),
+                )
             }
         }
+    }
+
+    private fun reportFailure(
+        kind: BrowserEngine.FailureKind,
+        detail: String,
+        recoverable: Boolean,
+    ) {
+        listener?.onEvent(BrowserEngine.Event.Failed(BrowserEngine.Failure(kind, detail, recoverable)))
     }
 
     private fun blockedRuleId(request: WebResourceRequest): String? {
@@ -276,7 +381,12 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
         }
 
         @JavascriptInterface
-        fun getResourceFilterStats(): String = resourceFilterStatsJson()
+        fun getResourceFilterStats(token: String?): String =
+            if (token == bridgeToken && TrustedWebContent.isAllowedMainFrameUrl(webView?.url)) {
+                resourceFilterStatsJson()
+            } else {
+                DISABLED_RESOURCE_FILTER_STATS
+            }
     }
 
     companion object {
@@ -285,6 +395,10 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
         private const val DESKTOP_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        private const val KEY_BRIDGE_TOKEN = "bridgeToken"
+        private const val DISABLED_RESOURCE_FILTER_STATS =
+            "{\"enabled\":false,\"total\":0,\"counts\":{}}"
+        private const val BRIDGE_TOKEN_PLACEHOLDER = "__WEBTVLIVE_BRIDGE_TOKEN__"
         private const val WEBVIEW_RUNTIME_SHIM = """
 (function () {
   if (window.__webTvLiveRuntimeReady) return;
@@ -293,6 +407,7 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
   var runtimeListeners = [];
   function post(payload) {
     try {
+      payload.bridgeToken = '__WEBTVLIVE_BRIDGE_TOKEN__';
       window.WebTvLiveNative.postMessage(JSON.stringify(payload || {}));
     } catch (e) {}
   }
@@ -323,7 +438,9 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
       sendMessage: function (message) {
         if (message && message.type === 'getResourceFilterStats') {
           try {
-            return Promise.resolve(JSON.parse(window.WebTvLiveNative.getResourceFilterStats()));
+            return Promise.resolve(JSON.parse(
+              window.WebTvLiveNative.getResourceFilterStats('__WEBTVLIVE_BRIDGE_TOKEN__')
+            ));
           } catch (e) {
             return Promise.resolve({ enabled: false, total: 0, counts: {} });
           }
@@ -340,5 +457,8 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
   };
 })();
 """
+
+        fun runtimeShim(token: String): String =
+            WEBVIEW_RUNTIME_SHIM.replace(BRIDGE_TOKEN_PLACEHOLDER, token)
     }
 }

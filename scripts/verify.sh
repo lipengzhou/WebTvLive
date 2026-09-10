@@ -22,6 +22,9 @@ if [[ -z ${JAVA_HOME:-} && -d "/Applications/Android Studio.app/Contents/jbr/Con
 fi
 require_command java
 
+echo "==> 输出构建运行时"
+"$ROOT_DIR/gradlew" -version
+
 echo "==> 检查 Shell 语法"
 shell_scripts=("$ROOT_DIR"/scripts/*.sh)
 for script in "${shell_scripts[@]}"; do
@@ -32,6 +35,7 @@ echo "==> 检查 JavaScript 语法"
 while IFS= read -r script; do
   node --check "$script"
 done < <(find "$ROOT_DIR/app/src" -type f -name '*.js' -print)
+node --test "$ROOT_DIR"/scripts/*.test.js
 
 echo "==> 检查 JSON 语法"
 jq empty "$ROOT_DIR/release/update.json"

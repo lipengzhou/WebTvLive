@@ -12,14 +12,6 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <!-- 保留的全屏视频兜底容器（GeckoView 当前通过页面样式直接全屏） -->
-    <FrameLayout
-        android:id="@+id/fullscreenContainer"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:background="@android:color/black"
-        android:visibility="gone" />
-
     <!-- 加载遮罩：全屏不透明黑底，盖住网页导航与未起播的封面/播放按钮，
          直到视频真正开播（JS 回传 notifyVideoPlaying）才切走 -->
     <TextView

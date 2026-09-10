@@ -1,6 +1,8 @@
 (function () {
   if (window.__webTvLivePlayerAdapterInjected) return;
   window.__webTvLivePlayerAdapterInjected = true;
+  var protocol = window.WebTvLiveProtocol;
+  if (!protocol) return;
 
   var MARK = 'data-webtvlive-fs';
   var KEEP = 'data-webtvlive-keep';
@@ -37,17 +39,17 @@
 
   function send(type, message) {
     try {
-      browser.runtime.sendNativeMessage('webtvlive', { type: type, message: message || '' });
+      browser.runtime.sendNativeMessage(
+        'webtvlive',
+        protocol.message(type, { message: message || '' })
+      );
     } catch (e) {}
   }
 
   function sendPort(type, extra) {
     if (!nativePort) return;
     try {
-      var payload = { type: type };
-      if (extra) {
-        for (var key in extra) payload[key] = extra[key];
-      }
+      var payload = protocol.message(type, extra);
       nativePort.postMessage(payload);
     } catch (e) {}
   }
@@ -87,7 +89,10 @@
     try {
       nativePort = browser.runtime.connectNative('webtvlive');
       nativePort.onMessage.addListener(function (message) {
-        if (!message) return;
+        if (!protocol.isCommand(message)) {
+          send('diagnostic', 'Ignored invalid native command');
+          return;
+        }
         if (message.type === 'setVideoEnhancement') {
           setVideoEnhancement(message.level);
           return;

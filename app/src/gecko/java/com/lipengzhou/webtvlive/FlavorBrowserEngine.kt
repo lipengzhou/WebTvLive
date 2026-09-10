@@ -3,7 +3,7 @@ package com.lipengzhou.webtvlive
 import android.content.Context
 import android.util.Log
 import android.view.ViewGroup
-import org.json.JSONObject
+import org.mozilla.geckoview.AllowOrDeny
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
@@ -44,16 +44,60 @@ class FlavorBrowserEngine(context: Context) : BrowserEngine {
             override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) = Unit
 
             override fun onCrash(session: GeckoSession) {
-                listener.onCrash()
+                listener.onEvent(
+                    BrowserEngine.Event.Failed(
+                        BrowserEngine.Failure(
+                            kind = BrowserEngine.FailureKind.CONTENT_PROCESS,
+                            detail = "Gecko 内容进程崩溃",
+                            recoverable = true,
+                        ),
+                    ),
+                )
+            }
+
+            override fun onKill(session: GeckoSession) {
+                listener.onEvent(
+                    BrowserEngine.Event.Failed(
+                        BrowserEngine.Failure(
+                            kind = BrowserEngine.FailureKind.CONTENT_PROCESS,
+                            detail = "Gecko 内容进程被系统终止",
+                            recoverable = true,
+                        ),
+                    ),
+                )
             }
         }
         session.progressDelegate = object : GeckoSession.ProgressDelegate {
             override fun onPageStart(session: GeckoSession, url: String) {
-                listener.onPageStarted(url)
+                listener.onEvent(BrowserEngine.Event.PageStarted(url))
             }
 
             override fun onPageStop(session: GeckoSession, success: Boolean) {
-                listener.onPageStopped(success)
+                listener.onEvent(BrowserEngine.Event.PageStopped(success))
+            }
+        }
+        session.navigationDelegate = object : GeckoSession.NavigationDelegate {
+            override fun onLoadRequest(
+                session: GeckoSession,
+                request: GeckoSession.NavigationDelegate.LoadRequest,
+            ): GeckoResult<AllowOrDeny> {
+                if (request.target == GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW) {
+                    listener.onEvent(
+                        BrowserEngine.Event.Diagnostic(
+                            "Blocked new browser window: ${request.uri}",
+                        ),
+                    )
+                    return GeckoResult.fromValue(AllowOrDeny.DENY)
+                }
+                val allowed = TrustedWebContent.isAllowedMainFrameUrl(request.uri)
+                if (!allowed) {
+                    reportFailure(
+                        BrowserEngine.FailureKind.NAVIGATION_BLOCKED,
+                        "已阻止非受信任页面：${request.uri}",
+                        recoverable = false,
+                    )
+                }
+                return GeckoResult.fromValue(if (allowed) AllowOrDeny.ALLOW else AllowOrDeny.DENY)
             }
         }
         session.permissionDelegate = object : GeckoSession.PermissionDelegate {
@@ -109,11 +153,7 @@ class FlavorBrowserEngine(context: Context) : BrowserEngine {
         videoEnhancement = level
         val port = extensionPort ?: return
         try {
-            port.postMessage(
-                JSONObject()
-                    .put("type", "setVideoEnhancement")
-                    .put("level", level.wireValue),
-            )
+            port.postMessage(BrowserProtocol.encode(BrowserProtocol.Command.SetVideoEnhancement(level)))
             Log.i(TAG, "Video enhancement requested: ${level.wireValue}")
         } catch (error: Exception) {
             Log.e(TAG, "Unable to send video enhancement through WebExtension port", error)
@@ -151,7 +191,11 @@ class FlavorBrowserEngine(context: Context) : BrowserEngine {
                 { extension ->
                     if (extension == null) {
                         Log.e(TAG, "GeckoView extension install returned null")
-                        listener?.onReady()
+                        reportFailure(
+                            BrowserEngine.FailureKind.INITIALIZATION,
+                            "GeckoView 页面适配扩展安装结果为空",
+                            recoverable = true,
+                        )
                         return@accept
                     }
                     session.webExtensionController.setMessageDelegate(
@@ -187,33 +231,51 @@ class FlavorBrowserEngine(context: Context) : BrowserEngine {
                         },
                         NATIVE_APP_ID,
                     )
-                    listener?.onReady()
+                    listener?.onEvent(BrowserEngine.Event.Initialized)
                 },
                 { error ->
                     Log.e(TAG, "Unable to install GeckoView extension", error)
-                    listener?.onReady()
+                    reportFailure(
+                        BrowserEngine.FailureKind.INITIALIZATION,
+                        "GeckoView 页面适配扩展安装失败：${error?.message.orEmpty()}",
+                        recoverable = true,
+                    )
                 },
             )
     }
 
     private fun handleExtensionMessage(message: Any, port: WebExtension.Port? = null) {
-        val payload = message as? JSONObject ?: return
-        when (payload.optString("type")) {
-            "ready" -> {
-                val activePort = port ?: extensionPort ?: return
-                extensionPort = activePort
-                applyVideoEnhancement(videoEnhancement)
-                pendingChannelSwitch?.let {
-                    if (postChannelSwitch(activePort, it.channel, it.requestId)) {
-                        pendingChannelSwitch = null
-                    }
-                }
+        when (val decoded = BrowserProtocol.decodeEvent(message)) {
+            is BrowserProtocol.DecodeResult.Invalid -> {
+                reportFailure(
+                    BrowserEngine.FailureKind.PROTOCOL,
+                    decoded.reason,
+                    recoverable = false,
+                )
             }
 
-            "playing" -> listener?.onPlaybackReady(payload.optLong("requestId", -1L))
-            "channelSelected" -> listener?.onChannelSelected(payload.optString("channel"))
-            "channelNotFound" -> listener?.onChannelNotFound(payload.optString("channel"))
-            "diagnostic" -> listener?.onDiagnostic(payload.optString("message"))
+            is BrowserProtocol.DecodeResult.Success -> when (val event = decoded.event) {
+                BrowserProtocol.PageEvent.Ready -> {
+                    val activePort = port ?: extensionPort ?: return
+                    extensionPort = activePort
+                    applyVideoEnhancement(videoEnhancement)
+                    pendingChannelSwitch?.let {
+                        if (postChannelSwitch(activePort, it.channel, it.requestId)) {
+                            pendingChannelSwitch = null
+                        }
+                    }
+                }
+
+                is BrowserProtocol.PageEvent.Playing -> listener?.onEvent(
+                    BrowserEngine.Event.PlaybackReady(event.requestId),
+                )
+                is BrowserProtocol.PageEvent.ChannelSelected -> listener?.onEvent(
+                    BrowserEngine.Event.ChannelSelected(event.channel),
+                )
+                is BrowserProtocol.PageEvent.Diagnostic -> listener?.onEvent(
+                    BrowserEngine.Event.Diagnostic(event.message),
+                )
+            }
         }
     }
 
@@ -224,11 +286,13 @@ class FlavorBrowserEngine(context: Context) : BrowserEngine {
     ): Boolean {
         return try {
             port.postMessage(
-                JSONObject()
-                    .put("type", "switchChannel")
-                    .put("channel", channel.siteName)
-                    .put("pid", channel.pid)
-                    .put("requestId", requestId),
+                BrowserProtocol.encode(
+                    BrowserProtocol.Command.SwitchChannel(
+                        channel = channel.siteName,
+                        pid = channel.pid,
+                        requestId = requestId,
+                    ),
+                ),
             )
             true
         } catch (error: Exception) {
@@ -236,6 +300,14 @@ class FlavorBrowserEngine(context: Context) : BrowserEngine {
             if (extensionPort === port) extensionPort = null
             false
         }
+    }
+
+    private fun reportFailure(
+        kind: BrowserEngine.FailureKind,
+        detail: String,
+        recoverable: Boolean,
+    ) {
+        listener?.onEvent(BrowserEngine.Event.Failed(BrowserEngine.Failure(kind, detail, recoverable)))
     }
 
     companion object {
