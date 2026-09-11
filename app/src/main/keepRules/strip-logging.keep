@@ -1,0 +1,11 @@
+# 仅正式构建生效：release 开启 R8（optimization.enable），debug 不做 minify，
+# 因此该规则不会影响 debug 的日志输出。
+#
+# 把 Log.v/d/i 声明为「无副作用」，R8 会在 release 中整体移除这些调用（含字符串拼接实参），
+# 既减少正式包体积，也避免把 StartupTiming、"Video playing…" 等诊断日志带进用户设备。
+# 刻意保留 Log.w/e/wtf：现场卡顿或播放失败时仍能通过 logcat 抓到告警与错误。
+-assumenosideeffects class android.util.Log {
+    public static *** v(...);
+    public static *** d(...);
+    public static *** i(...);
+}

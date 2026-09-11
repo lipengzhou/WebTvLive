@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import androidx.core.content.edit
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -254,14 +255,14 @@ private class SharedPreferencesProgramGuideCache(context: Context) : ProgramGuid
             .put("updateTime", entry.guide.updateTimeEpochSeconds)
             .put("items", programs)
             .toString()
-        preferences.edit().putString(key, value).apply()
+        preferences.edit { putString(key, value) }
     }
 
     override fun read(key: String, expectedDate: String): CachedProgramGuide? = runCatching {
         val root = JSONObject(preferences.getString(key, null) ?: return null)
         val date = root.getString("date")
         if (date != expectedDate) {
-            preferences.edit().remove(key).apply()
+            preferences.edit { remove(key) }
             return null
         }
         val array = root.getJSONArray("items")
@@ -290,18 +291,18 @@ private class SharedPreferencesProgramGuideCache(context: Context) : ProgramGuid
             guide = ProgramGuide(root.optLong("updateTime"), items),
         )
     }.onFailure {
-        preferences.edit().remove(key).apply()
+        preferences.edit { remove(key) }
     }.getOrNull()
 
     override fun removeOtherDates(currentDate: String) {
-        val editor = preferences.edit()
-        preferences.all.keys
-            .filter {
-                it.startsWith(ProgramGuideRepository.CACHE_KEY_PREFIX) &&
-                    !it.endsWith("_$currentDate")
-            }
-            .forEach(editor::remove)
-        editor.apply()
+        preferences.edit {
+            preferences.all.keys
+                .filter {
+                    it.startsWith(ProgramGuideRepository.CACHE_KEY_PREFIX) &&
+                        !it.endsWith("_$currentDate")
+                }
+                .forEach { remove(it) }
+        }
     }
 
     private companion object {

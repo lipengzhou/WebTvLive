@@ -1,6 +1,5 @@
 package com.lipengzhou.webtvlive
 
-import android.content.Context
 import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
@@ -26,7 +25,7 @@ class PlaybackTouchController(
     private val switchChannel: (delta: Int) -> Unit,
 ) {
     private val handler = Handler(Looper.getMainLooper())
-    private val preferences = activity.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+    private val preferences = AppPreferences.of(activity)
     private val audioManager = activity.getSystemService(AudioManager::class.java)
     private val interpreter = TouchGestureInterpreter(
         touchSlopPx = ViewConfiguration.get(activity).scaledTouchSlop.toFloat(),
@@ -243,14 +242,14 @@ class PlaybackTouchController(
     }
 
     private fun restoreBrightness(): Float? {
-        if (!preferences.contains(KEY_BRIGHTNESS)) return null
-        val saved = preferences.getFloat(KEY_BRIGHTNESS, DEFAULT_SYSTEM_BRIGHTNESS)
+        if (!preferences.contains(AppPreferences.KEY_BRIGHTNESS)) return null
+        val saved = preferences.getFloat(AppPreferences.KEY_BRIGHTNESS, DEFAULT_SYSTEM_BRIGHTNESS)
         return saved.takeIf { it in 0f..1f }?.coerceIn(MIN_BRIGHTNESS, 1f)
     }
 
     private fun saveBrightness(value: Float) {
         preferences.edit {
-            putFloat(KEY_BRIGHTNESS, value.coerceIn(MIN_BRIGHTNESS, 1f))
+            putFloat(AppPreferences.KEY_BRIGHTNESS, value.coerceIn(MIN_BRIGHTNESS, 1f))
         }
     }
 
@@ -309,8 +308,6 @@ class PlaybackTouchController(
         (firstX < width / 2f) == (secondX < width / 2f)
 
     private companion object {
-        const val PREFERENCES_NAME = "webtvlive_prefs"
-        const val KEY_BRIGHTNESS = "playback_brightness"
         const val DOUBLE_TAP_MS = 300L
         const val ADJUSTMENT_SHOW_MS = 900L
         const val CONTROLS_SHOW_MS = 3_000L

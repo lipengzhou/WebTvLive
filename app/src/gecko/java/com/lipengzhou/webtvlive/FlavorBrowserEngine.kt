@@ -21,11 +21,6 @@ class FlavorBrowserEngine(context: Context) : BrowserEngine {
     private var pendingChannelSwitch: PendingChannelSwitch? = null
     private var videoEnhancement = VideoEnhancement.ORIGINAL
 
-    private data class PendingChannelSwitch(
-        val channel: Channel,
-        val requestId: Long,
-    )
-
     override fun attach(container: ViewGroup, listener: BrowserEngine.Listener) {
         this.listener = listener
 
@@ -245,36 +240,14 @@ class FlavorBrowserEngine(context: Context) : BrowserEngine {
     }
 
     private fun handleExtensionMessage(message: Any, port: WebExtension.Port? = null) {
-        when (val decoded = BrowserProtocol.decodeEvent(message)) {
-            is BrowserProtocol.DecodeResult.Invalid -> {
-                reportFailure(
-                    BrowserEngine.FailureKind.PROTOCOL,
-                    decoded.reason,
-                    recoverable = false,
-                )
-            }
-
-            is BrowserProtocol.DecodeResult.Success -> when (val event = decoded.event) {
-                BrowserProtocol.PageEvent.Ready -> {
-                    val activePort = port ?: extensionPort ?: return
-                    extensionPort = activePort
-                    applyVideoEnhancement(videoEnhancement)
-                    pendingChannelSwitch?.let {
-                        if (postChannelSwitch(activePort, it.channel, it.requestId)) {
-                            pendingChannelSwitch = null
-                        }
-                    }
+        dispatchPageEvent(message, listener) {
+            val activePort = port ?: extensionPort ?: return@dispatchPageEvent
+            extensionPort = activePort
+            applyVideoEnhancement(videoEnhancement)
+            pendingChannelSwitch?.let {
+                if (postChannelSwitch(activePort, it.channel, it.requestId)) {
+                    pendingChannelSwitch = null
                 }
-
-                is BrowserProtocol.PageEvent.Playing -> listener?.onEvent(
-                    BrowserEngine.Event.PlaybackReady(event.requestId),
-                )
-                is BrowserProtocol.PageEvent.ChannelSelected -> listener?.onEvent(
-                    BrowserEngine.Event.ChannelSelected(event.channel),
-                )
-                is BrowserProtocol.PageEvent.Diagnostic -> listener?.onEvent(
-                    BrowserEngine.Event.Diagnostic(event.message),
-                )
             }
         }
     }
@@ -307,7 +280,7 @@ class FlavorBrowserEngine(context: Context) : BrowserEngine {
         detail: String,
         recoverable: Boolean,
     ) {
-        listener?.onEvent(BrowserEngine.Event.Failed(BrowserEngine.Failure(kind, detail, recoverable)))
+        listener?.reportFailure(kind, detail, recoverable)
     }
 
     companion object {
@@ -315,8 +288,6 @@ class FlavorBrowserEngine(context: Context) : BrowserEngine {
         private const val EXTENSION_LOCATION = "resource://android/assets/webextension/"
         private const val EXTENSION_ID = "webtvlive@lipengzhou.com"
         private const val NATIVE_APP_ID = "webtvlive"
-        private const val DESKTOP_UA =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        private const val DESKTOP_UA = DESKTOP_BROWSER_USER_AGENT
     }
 }

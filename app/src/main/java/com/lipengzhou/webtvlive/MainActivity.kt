@@ -12,6 +12,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.edit
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -41,7 +42,7 @@ class MainActivity : AppCompatActivity() {
     private var lastBackPressedTime = 0L
 
     // 记住「上次播放的频道」：应用退出后重开继续播放该台
-    private val prefs by lazy { getSharedPreferences(PREFS_NAME, MODE_PRIVATE) }
+    private val prefs by lazy { AppPreferences.of(this) }
 
     // 当前频道下标（遥控器上/下切换）；无记录时默认 CCTV-13 新闻，保持与旧版一致。
     // 这里用的是「所有分类频道拉平后的一维下标」，见 TvCatalog.flatChannels。
@@ -88,10 +89,6 @@ class MainActivity : AppCompatActivity() {
         private const val DEFAULT_CHANNEL_INDEX = 13
         private const val STABLE_FALLBACK_SITE_NAME = "CCTV9"
         private const val SECONDARY_FALLBACK_SITE_NAME = "CCTV10"
-        // 记住上次频道用的 SharedPreferences
-        private const val PREFS_NAME = "webtvlive_prefs"
-        private const val KEY_LAST_CHANNEL = "last_channel_index"
-        private const val KEY_LAST_SUCCESSFUL_CHANNEL = "last_successful_channel_index"
         private const val TAG = "WebTvLive"
     }
 
@@ -497,20 +494,20 @@ class MainActivity : AppCompatActivity() {
 
     /** 读取最近一次真正收到 playing 的频道；兼容旧版本保存的频道下标。 */
     private fun restoreLastSuccessfulChannelIndex(): Int {
-        val saved = if (prefs.contains(KEY_LAST_SUCCESSFUL_CHANNEL)) {
-            prefs.getInt(KEY_LAST_SUCCESSFUL_CHANNEL, DEFAULT_CHANNEL_INDEX)
+        val saved = if (prefs.contains(AppPreferences.KEY_LAST_SUCCESSFUL_CHANNEL)) {
+            prefs.getInt(AppPreferences.KEY_LAST_SUCCESSFUL_CHANNEL, DEFAULT_CHANNEL_INDEX)
         } else {
-            prefs.getInt(KEY_LAST_CHANNEL, DEFAULT_CHANNEL_INDEX)
+            prefs.getInt(AppPreferences.KEY_LAST_CHANNEL, DEFAULT_CHANNEL_INDEX)
         }
         return if (saved in TvCatalog.flatChannels.indices) saved else DEFAULT_CHANNEL_INDEX
     }
 
     /** 只在目标频道真正出画面后持久化，避免失败频道污染下一次冷启动。 */
     private fun saveSuccessfulChannelIndex(index: Int) {
-        prefs.edit()
-            .putInt(KEY_LAST_SUCCESSFUL_CHANNEL, index)
-            .putInt(KEY_LAST_CHANNEL, index)
-            .apply()
+        prefs.edit {
+            putInt(AppPreferences.KEY_LAST_SUCCESSFUL_CHANNEL, index)
+            putInt(AppPreferences.KEY_LAST_CHANNEL, index)
+        }
     }
 
     private fun startupElapsed(): Long = SystemClock.elapsedRealtime() - activityStartedAt

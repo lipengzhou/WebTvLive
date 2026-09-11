@@ -4,11 +4,12 @@ import android.app.DownloadManager
 import android.content.Context
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
+import androidx.core.content.edit
+import androidx.core.net.toUri
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.HttpURLConnection
@@ -93,7 +94,7 @@ class AppUpdateManager(context: Context) {
 
     fun skipVersion(versionCode: Long) {
         if (loadTask()?.versionCode == versionCode) clearTask(deleteFile = true)
-        prefs.edit().putLong(KEY_SKIPPED_VERSION, versionCode).apply()
+        prefs.edit { putLong(KEY_SKIPPED_VERSION, versionCode) }
     }
 
     fun enqueue(manifest: UpdateManifest, asset: UpdateAsset): EnqueueResult {
@@ -124,7 +125,7 @@ class AppUpdateManager(context: Context) {
         destination.delete()
 
         return runCatching {
-            val request = DownloadManager.Request(Uri.parse(asset.url))
+            val request = DownloadManager.Request(asset.url.toUri())
                 .setTitle("看电视 ${manifest.versionName}")
                 .setDescription("正在下载应用更新")
                 .setMimeType(APK_MIME_TYPE)
@@ -191,11 +192,11 @@ class AppUpdateManager(context: Context) {
         prefs.getLong(KEY_INSTALL_PROMPTED_DOWNLOAD_ID, -1L) == downloadId
 
     fun markInstallPrompted(downloadId: Long) {
-        prefs.edit().putLong(KEY_INSTALL_PROMPTED_DOWNLOAD_ID, downloadId).apply()
+        prefs.edit { putLong(KEY_INSTALL_PROMPTED_DOWNLOAD_ID, downloadId) }
     }
 
     fun allowInstallRetry() {
-        prefs.edit().remove(KEY_INSTALL_PROMPTED_DOWNLOAD_ID).apply()
+        prefs.edit { remove(KEY_INSTALL_PROMPTED_DOWNLOAD_ID) }
     }
 
     fun close() {
@@ -262,24 +263,19 @@ class AppUpdateManager(context: Context) {
         val installedSigningInfo = installedPackageInfo().signingInfo
             ?: error("无法读取当前应用签名")
         val archiveSigningInfo = archive.signingInfo ?: error("无法读取更新安装包签名")
-        val installedCurrentSigners = installedSigningInfo.apkContentsSigners
-            .map { it.toByteArray().sha256() }
-            .toSet()
-        val archiveCurrentSigners = archiveSigningInfo.apkContentsSigners
-            .map { it.toByteArray().sha256() }
-            .toSet()
-        val signatureMatches = if (
-            installedSigningInfo.hasMultipleSigners() || archiveSigningInfo.hasMultipleSigners()
-        ) {
-            installedCurrentSigners.isNotEmpty() &&
-                installedCurrentSigners == archiveCurrentSigners
-        } else {
-            val archiveSignerHistory = archiveSigningInfo.signingCertificateHistory
+        val signatureMatches = UpdateSignatureMatcher.matches(
+            installedCurrentSigners = installedSigningInfo.apkContentsSigners
                 .map { it.toByteArray().sha256() }
-                .toSet()
-            installedCurrentSigners.isNotEmpty() &&
-                archiveSignerHistory.containsAll(installedCurrentSigners)
-        }
+                .toSet(),
+            archiveCurrentSigners = archiveSigningInfo.apkContentsSigners
+                .map { it.toByteArray().sha256() }
+                .toSet(),
+            archiveSignerHistory = archiveSigningInfo.signingCertificateHistory
+                .map { it.toByteArray().sha256() }
+                .toSet(),
+            multipleSigners = installedSigningInfo.hasMultipleSigners() ||
+                archiveSigningInfo.hasMultipleSigners(),
+        )
         require(signatureMatches) { "更新安装包签名与当前应用不一致" }
     }
 
@@ -308,15 +304,15 @@ class AppUpdateManager(context: Context) {
     }
 
     private fun saveTask(task: DownloadTask) {
-        prefs.edit()
-            .putLong(KEY_DOWNLOAD_ID, task.downloadId)
-            .putLong(KEY_DOWNLOAD_VERSION_CODE, task.versionCode)
-            .putString(KEY_DOWNLOAD_VERSION_NAME, task.versionName)
-            .putString(KEY_DOWNLOAD_URL, task.url)
-            .putString(KEY_DOWNLOAD_FILE_NAME, task.fileName)
-            .putLong(KEY_DOWNLOAD_SIZE, task.sizeBytes)
-            .putString(KEY_DOWNLOAD_SHA256, task.sha256)
-            .apply()
+        prefs.edit {
+            putLong(KEY_DOWNLOAD_ID, task.downloadId)
+            putLong(KEY_DOWNLOAD_VERSION_CODE, task.versionCode)
+            putString(KEY_DOWNLOAD_VERSION_NAME, task.versionName)
+            putString(KEY_DOWNLOAD_URL, task.url)
+            putString(KEY_DOWNLOAD_FILE_NAME, task.fileName)
+            putLong(KEY_DOWNLOAD_SIZE, task.sizeBytes)
+            putString(KEY_DOWNLOAD_SHA256, task.sha256)
+        }
     }
 
     private fun loadTask(): DownloadTask? {
@@ -343,21 +339,21 @@ class AppUpdateManager(context: Context) {
             downloadManager.remove(task.downloadId)
             if (deleteFile) updatesDirectory()?.resolve(task.fileName)?.delete()
         }
-        prefs.edit()
-            .remove(KEY_DOWNLOAD_ID)
-            .remove(KEY_DOWNLOAD_VERSION_CODE)
-            .remove(KEY_DOWNLOAD_VERSION_NAME)
-            .remove(KEY_DOWNLOAD_URL)
-            .remove(KEY_DOWNLOAD_FILE_NAME)
-            .remove(KEY_DOWNLOAD_SIZE)
-            .remove(KEY_DOWNLOAD_SHA256)
-            .remove(KEY_INSTALL_PROMPTED_DOWNLOAD_ID)
-            .apply()
+        prefs.edit {
+            remove(KEY_DOWNLOAD_ID)
+            remove(KEY_DOWNLOAD_VERSION_CODE)
+            remove(KEY_DOWNLOAD_VERSION_NAME)
+            remove(KEY_DOWNLOAD_URL)
+            remove(KEY_DOWNLOAD_FILE_NAME)
+            remove(KEY_DOWNLOAD_SIZE)
+            remove(KEY_DOWNLOAD_SHA256)
+            remove(KEY_INSTALL_PROMPTED_DOWNLOAD_ID)
+        }
     }
 
     private fun clearObsoleteSkip() {
         if (prefs.getLong(KEY_SKIPPED_VERSION, -1L) <= currentVersionCode) {
-            prefs.edit().remove(KEY_SKIPPED_VERSION).apply()
+            prefs.edit { remove(KEY_SKIPPED_VERSION) }
         }
     }
 

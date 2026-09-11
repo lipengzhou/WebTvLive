@@ -26,6 +26,7 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
     private var listener: BrowserEngine.Listener? = null
     private var adapterScript: String? = null
     private var protocolScript: String? = null
+    private var adapterCoreScript: String? = null
     private var bridgeToken = ""
     private var bridgeReady = false
     private var pendingChannelSwitch: PendingChannelSwitch? = null
@@ -38,17 +39,13 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
     )
     private var resourceFilterTotal = 0
 
-    private data class PendingChannelSwitch(
-        val channel: Channel,
-        val requestId: Long,
-    )
-
     @SuppressLint("SetJavaScriptEnabled")
     override fun attach(container: ViewGroup, listener: BrowserEngine.Listener) {
         this.listener = listener
         adapterScript = loadAsset("webextension/player_adapter.js")
         protocolScript = loadAsset("webextension/protocol.js")
-        if (adapterScript == null || protocolScript == null) {
+        adapterCoreScript = loadAsset("webextension/player_adapter_core.js")
+        if (adapterScript == null || protocolScript == null || adapterCoreScript == null) {
             reportFailure(
                 BrowserEngine.FailureKind.INITIALIZATION,
                 "WebView 页面适配脚本读取失败",
@@ -224,8 +221,12 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
     private fun injectAdapter(view: WebView) {
         if (!TrustedWebContent.isAllowedMainFrameUrl(view.url)) return
         val protocol = protocolScript ?: return
+        val adapterCore = adapterCoreScript ?: return
         val adapter = adapterScript ?: return
-        view.evaluateJavascript(runtimeShim(bridgeToken) + "\n" + protocol + "\n" + adapter, null)
+        view.evaluateJavascript(
+            runtimeShim(bridgeToken) + "\n" + protocol + "\n" + adapterCore + "\n" + adapter,
+            null,
+        )
     }
 
     private fun postPendingChannelSwitch() {
@@ -270,30 +271,10 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
             return
         }
         payload.remove(KEY_BRIDGE_TOKEN)
-        when (val decoded = BrowserProtocol.decodeEvent(payload)) {
-            is BrowserProtocol.DecodeResult.Invalid -> reportFailure(
-                BrowserEngine.FailureKind.PROTOCOL,
-                decoded.reason,
-                recoverable = false,
-            )
-
-            is BrowserProtocol.DecodeResult.Success -> when (val event = decoded.event) {
-                BrowserProtocol.PageEvent.Ready -> {
-                    bridgeReady = true
-                    applyVideoEnhancement(videoEnhancement)
-                    postPendingChannelSwitch()
-                }
-
-                is BrowserProtocol.PageEvent.Playing -> listener?.onEvent(
-                    BrowserEngine.Event.PlaybackReady(event.requestId),
-                )
-                is BrowserProtocol.PageEvent.ChannelSelected -> listener?.onEvent(
-                    BrowserEngine.Event.ChannelSelected(event.channel),
-                )
-                is BrowserProtocol.PageEvent.Diagnostic -> listener?.onEvent(
-                    BrowserEngine.Event.Diagnostic(event.message),
-                )
-            }
+        dispatchPageEvent(payload, listener) {
+            bridgeReady = true
+            applyVideoEnhancement(videoEnhancement)
+            postPendingChannelSwitch()
         }
     }
 
@@ -302,7 +283,7 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
         detail: String,
         recoverable: Boolean,
     ) {
-        listener?.onEvent(BrowserEngine.Event.Failed(BrowserEngine.Failure(kind, detail, recoverable)))
+        listener?.reportFailure(kind, detail, recoverable)
     }
 
     private fun blockedRuleId(request: WebResourceRequest): String? {
@@ -392,9 +373,7 @@ class FlavorBrowserEngine(private val context: Context) : BrowserEngine {
     companion object {
         private const val TAG = "WebTvLive"
         private const val BRIDGE_NAME = "WebTvLiveNative"
-        private const val DESKTOP_UA =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        private const val DESKTOP_UA = DESKTOP_BROWSER_USER_AGENT
         private const val KEY_BRIDGE_TOKEN = "bridgeToken"
         private const val DISABLED_RESOURCE_FILTER_STATS =
             "{\"enabled\":false,\"total\":0,\"counts\":{}}"

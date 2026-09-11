@@ -2,7 +2,6 @@
     <string name="app_name">看电视</string>
     <string name="loading">正在加载直播…</string>
     <string name="exit_hint">再按一次返回键退出</string>
-    <string name="menu_hint_ok">按「确定」打开频道菜单</string>
     <string name="channel_timeout_fallback">频道加载超时，正在尝试%1$s</string>
     <string name="channel_timeout_retry">频道加载较慢，正在重新连接</string>
     <string name="channel_timeout_manual">频道暂时无法播放，请按上下键切换频道</string>

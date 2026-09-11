@@ -16,7 +16,7 @@
       "matches": [
         "https://*.yangshipin.cn/*"
       ],
-      "js": ["protocol.js", "player_adapter.js"],
+      "js": ["protocol.js", "player_adapter_core.js", "player_adapter.js"],
       "run_at": "document_idle"
     }
   ],

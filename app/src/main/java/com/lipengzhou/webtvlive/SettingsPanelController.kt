@@ -1,6 +1,5 @@
 package com.lipengzhou.webtvlive
 
-import android.content.Context
 import android.view.KeyEvent
 import android.view.SoundEffectConstants
 import android.view.View
@@ -26,7 +25,7 @@ class SettingsPanelController(
         ABOUT(R.string.setting_about),
     }
 
-    private val preferences = activity.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+    private val preferences = AppPreferences.of(activity)
     private val availableItems = Item.entries.filter { item ->
         BuildConfig.APP_UPDATES_ENABLED || item != Item.CHECK_UPDATE
     }
@@ -35,11 +34,12 @@ class SettingsPanelController(
     private var initialized = false
 
     var videoEnhancement: VideoEnhancement = VideoEnhancement.fromWireValue(
-        preferences.getString(KEY_VIDEO_ENHANCEMENT, null),
+        preferences.getString(AppPreferences.KEY_VIDEO_ENHANCEMENT, null),
     )
         private set
 
-    var channelSwitchReversed: Boolean = preferences.getBoolean(KEY_CHANNEL_SWITCH_REVERSED, false)
+    var channelSwitchReversed: Boolean =
+        preferences.getBoolean(AppPreferences.KEY_CHANNEL_SWITCH_REVERSED, false)
         private set
 
     val isVisible: Boolean
@@ -201,7 +201,7 @@ class SettingsPanelController(
     private fun selectVideoEnhancement(position: Int) {
         val selected = VideoEnhancement.entries.getOrNull(position) ?: return
         videoEnhancement = selected
-        preferences.edit { putString(KEY_VIDEO_ENHANCEMENT, selected.wireValue) }
+        preferences.edit { putString(AppPreferences.KEY_VIDEO_ENHANCEMENT, selected.wireValue) }
         valueAdapter.submit(videoEnhancementLabels(), keepIndex = position)
         valueAdapter.setColumnActive(activeColumn() == PanelCoordinator.SettingsColumn.VALUE)
         onVideoEnhancementChanged(selected)
@@ -209,7 +209,7 @@ class SettingsPanelController(
 
     private fun selectChannelSwitchReverse(position: Int) {
         channelSwitchReversed = position == 1
-        preferences.edit { putBoolean(KEY_CHANNEL_SWITCH_REVERSED, channelSwitchReversed) }
+        preferences.edit { putBoolean(AppPreferences.KEY_CHANNEL_SWITCH_REVERSED, channelSwitchReversed) }
         valueAdapter.submit(channelSwitchReverseLabels(), keepIndex = position)
         valueAdapter.setColumnActive(activeColumn() == PanelCoordinator.SettingsColumn.VALUE)
     }
@@ -252,11 +252,5 @@ class SettingsPanelController(
 
     private fun playSound(soundConstant: Int) {
         binding.settingsPanel.playSoundEffect(soundConstant)
-    }
-
-    private companion object {
-        const val PREFERENCES_NAME = "webtvlive_prefs"
-        const val KEY_VIDEO_ENHANCEMENT = "video_enhancement"
-        const val KEY_CHANNEL_SWITCH_REVERSED = "channel_switch_reversed"
     }
 }

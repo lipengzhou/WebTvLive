@@ -43,6 +43,23 @@ while IFS= read -r json_file; do
   jq empty "$json_file"
 done < <(find "$ROOT_DIR/app/src" -type f -name '*.json' -print)
 
+echo "==> 校验发布标签与 versionName 一致"
+# 仅当 HEAD 上存在版本 tag 时才校验（普通提交是 no-op）；覆盖/重打 tag 也只要求名字与
+# build.gradle.kts 的 versionName 对齐，不关心版本高低。防的是「tag 名与包内版本对不上」的手滑。
+version_name=$(sed -n 's/^val webtvliveVersionName = "\(.*\)"$/\1/p' \
+  "$ROOT_DIR/app/build.gradle.kts" | head -1)
+[[ -n "$version_name" ]] || {
+  echo "无法从 app/build.gradle.kts 解析 versionName" >&2
+  exit 1
+}
+while IFS= read -r tag; do
+  [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+  [[ "$tag" == "v$version_name" ]] || {
+    echo "发布标签 $tag 与 versionName（$version_name）不一致，应为 v$version_name" >&2
+    exit 1
+  }
+done < <(git -C "$ROOT_DIR" tag --points-at HEAD 2>/dev/null)
+
 echo "==> 验证正式构建签名门禁"
 "$ROOT_DIR/scripts/verify-release-signing.sh"
 

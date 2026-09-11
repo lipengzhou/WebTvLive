@@ -3,6 +3,8 @@
   window.__webTvLivePlayerAdapterInjected = true;
   var protocol = window.WebTvLiveProtocol;
   if (!protocol) return;
+  var core = window.WebTvLivePlayerAdapterCore;
+  if (!core) return;
 
   var MARK = 'data-webtvlive-fs';
   var KEEP = 'data-webtvlive-keep';
@@ -229,13 +231,14 @@
     var bestScore = -1;
     for (var i = 0; i < videos.length; i++) {
       var video = videos[i];
-      // 换台期间只要出现不同于旧播放器的新节点，就优先选择新节点。
-      var replacementBonus = waitingForReplacementVideo && video !== videoBeforeChannelSwitch
-        ? 10000000
-        : 0;
       var rect = video.getBoundingClientRect();
-      var score = replacementBonus + rect.width * rect.height +
-        (video.readyState >= 2 ? 2000000 : 0) + (!video.paused ? 1000000 : 0);
+      var score = core.videoScore({
+        isReplacementCandidate: waitingForReplacementVideo && video !== videoBeforeChannelSwitch,
+        width: rect.width,
+        height: rect.height,
+        readyState: video.readyState,
+        paused: video.paused,
+      });
       if (score > bestScore) {
         bestScore = score;
         best = video;
@@ -254,9 +257,7 @@
     for (var i = 0; i < frames.length; i++) {
       var frame = frames[i];
       var rect = frame.getBoundingClientRect();
-      var src = (frame.src || '').toLowerCase();
-      var sourceBonus = /(player|live|cntv|cctv|yangshipin)/.test(src) ? 10000000 : 0;
-      var score = rect.width * rect.height + sourceBonus;
+      var score = core.playerFrameScore(rect.width, rect.height, frame.src || '');
       if (score > bestScore) {
         bestScore = score;
         best = frame;
@@ -267,15 +268,6 @@
 
   function setImp(element, key, value) {
     try { element.style.setProperty(key, value, 'important'); } catch (e) {}
-  }
-
-  function enhancementProfile(level) {
-    switch (level) {
-      case 'light': return { contrast: 1.03, saturation: 1.02, brightness: 1.00 };
-      case 'standard': return { contrast: 1.06, saturation: 1.03, brightness: 1.01 };
-      case 'strong': return { contrast: 1.10, saturation: 1.05, brightness: 1.02 };
-      default: return null;
-    }
   }
 
   /**
@@ -290,7 +282,7 @@
       video.__webTvOriginalFilterPriority = video.style.getPropertyPriority('filter');
     }
 
-    var profile = enhancementProfile(videoEnhancementLevel);
+    var profile = core.enhancementProfile(videoEnhancementLevel);
     if (!profile) {
       if (video.__webTvOriginalFilter) {
         video.style.setProperty(
@@ -326,9 +318,7 @@
   }
 
   function setVideoEnhancement(level) {
-    videoEnhancementLevel = /^(original|light|standard|strong)$/.test(String(level))
-      ? String(level)
-      : 'original';
+    videoEnhancementLevel = core.normalizeEnhancementLevel(level);
     if (configuredVideo && configuredVideo.isConnected) {
       applyVideoEnhancement(configuredVideo);
     }

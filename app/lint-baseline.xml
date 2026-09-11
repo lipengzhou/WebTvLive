@@ -46,46 +46,6 @@
     </issue>
 
     <issue
-        id="UnusedResources"
-        message="The resource `R.drawable.ic_launcher_background` appears to be unused"
-        errorLine1="&lt;vector xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
-        errorLine2="^">
-        <location
-            file="src/main/res/drawable/ic_launcher_background.xml"
-            line="2"
-            column="1"/>
-    </issue>
-
-    <issue
-        id="UnusedResources"
-        message="The resource `R.drawable.ic_launcher_foreground` appears to be unused"
-        errorLine1="&lt;vector xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
-        errorLine2="^">
-        <location
-            file="src/main/res/drawable/ic_launcher_foreground.xml"
-            line="1"
-            column="1"/>
-    </issue>
-
-    <issue
-        id="UnusedResources"
-        message="The resource `R.drawable.ic_launcher_image` appears to be unused">
-        <location
-            file="src/main/res/drawable-nodpi/ic_launcher_image.png"/>
-    </issue>
-
-    <issue
-        id="UnusedResources"
-        message="The resource `R.string.menu_hint_ok` appears to be unused"
-        errorLine1="    &lt;string name=&quot;menu_hint_ok&quot;>按「确定」打开频道菜单&lt;/string>"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/res/values/strings.xml"
-            line="5"
-            column="13"/>
-    </issue>
-
-    <issue
         id="UselessParent"
         message="This `FrameLayout` layout or its `LinearLayout` parent is unnecessary; transfer the `background` attribute to the other view"
         errorLine1="            &lt;FrameLayout"
@@ -129,13 +89,6 @@
         message="Launcher icons should not fill every pixel of their square region; see the design guide for details">
         <location
             file="src/main/res/mipmap-xxxhdpi/ic_launcher.png"/>
-    </issue>
-
-    <issue
-        id="IconLauncherShape"
-        message="Launcher icons should not fill every pixel of their square region; see the design guide for details">
-        <location
-            file="src/main/res/drawable-nodpi/ic_launcher_image.png"/>
     </issue>
 
     <issue
@@ -249,138 +202,6 @@
             file="src/main/res/layout/activity_main.xml"
             line="92"
             column="10"/>
-    </issue>
-
-    <issue
-        id="UseKtx"
-        message="Use the KTX extension function `SharedPreferences.edit` instead?"
-        errorLine1="        prefs.edit().putLong(KEY_SKIPPED_VERSION, versionCode).apply()"
-        errorLine2="        ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/lipengzhou/webtvlive/AppUpdateManager.kt"
-            line="96"
-            column="9"/>
-    </issue>
-
-    <issue
-        id="UseKtx"
-        message="Use the KTX extension function `String.toUri` instead?"
-        errorLine1="            val request = DownloadManager.Request(Uri.parse(asset.url))"
-        errorLine2="                                                  ~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/lipengzhou/webtvlive/AppUpdateManager.kt"
-            line="127"
-            column="51"/>
-    </issue>
-
-    <issue
-        id="UseKtx"
-        message="Use the KTX extension function `SharedPreferences.edit` instead?"
-        errorLine1="        prefs.edit().putLong(KEY_INSTALL_PROMPTED_DOWNLOAD_ID, downloadId).apply()"
-        errorLine2="        ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/lipengzhou/webtvlive/AppUpdateManager.kt"
-            line="194"
-            column="9"/>
-    </issue>
-
-    <issue
-        id="UseKtx"
-        message="Use the KTX extension function `SharedPreferences.edit` instead?"
-        errorLine1="        prefs.edit().remove(KEY_INSTALL_PROMPTED_DOWNLOAD_ID).apply()"
-        errorLine2="        ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/lipengzhou/webtvlive/AppUpdateManager.kt"
-            line="198"
-            column="9"/>
-    </issue>
-
-    <issue
-        id="UseKtx"
-        message="Use the KTX extension function `SharedPreferences.edit` instead?"
-        errorLine1="        prefs.edit()"
-        errorLine2="        ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/lipengzhou/webtvlive/AppUpdateManager.kt"
-            line="311"
-            column="9"/>
-    </issue>
-
-    <issue
-        id="UseKtx"
-        message="Use the KTX extension function `SharedPreferences.edit` instead?"
-        errorLine1="        prefs.edit()"
-        errorLine2="        ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/lipengzhou/webtvlive/AppUpdateManager.kt"
-            line="346"
-            column="9"/>
-    </issue>
-
-    <issue
-        id="UseKtx"
-        message="Use the KTX extension function `SharedPreferences.edit` instead?"
-        errorLine1="            prefs.edit().remove(KEY_SKIPPED_VERSION).apply()"
-        errorLine2="            ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/lipengzhou/webtvlive/AppUpdateManager.kt"
-            line="360"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="UseKtx"
-        message="Use the KTX extension function `SharedPreferences.edit` instead?"
-        errorLine1="        prefs.edit()"
-        errorLine2="        ~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/lipengzhou/webtvlive/MainActivity.kt"
-            line="510"
-            column="9"/>
-    </issue>
-
-    <issue
-        id="UseKtx"
-        message="Use the KTX extension function `SharedPreferences.edit` instead?"
-        errorLine1="        preferences.edit().putString(key, value).apply()"
-        errorLine2="        ~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/lipengzhou/webtvlive/ProgramGuideRepository.kt"
-            line="257"
-            column="9"/>
-    </issue>
-
-    <issue
-        id="UseKtx"
-        message="Use the KTX extension function `SharedPreferences.edit` instead?"
-        errorLine1="            preferences.edit().remove(key).apply()"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/lipengzhou/webtvlive/ProgramGuideRepository.kt"
-            line="264"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="UseKtx"
-        message="Use the KTX extension function `SharedPreferences.edit` instead?"
-        errorLine1="        preferences.edit().remove(key).apply()"
-        errorLine2="        ~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/lipengzhou/webtvlive/ProgramGuideRepository.kt"
-            line="293"
-            column="9"/>
-    </issue>
-
-    <issue
-        id="UseKtx"
-        message="Use the KTX extension function `SharedPreferences.edit` instead?"
-        errorLine1="        val editor = preferences.edit()"
-        errorLine2="                     ~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/lipengzhou/webtvlive/ProgramGuideRepository.kt"
-            line="297"
-            column="22"/>
     </issue>
 
 </issues>
